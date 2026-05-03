@@ -168,7 +168,7 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
         }
 
         let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: identifiers, options: nil)
-        try await withCheckedThrowingContinuation { continuation in
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 PHAssetChangeRequest.deleteAssets(fetchResult)
             }) { success, error in
@@ -188,7 +188,7 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
             localIdentifier: asset.localIdentifier,
             mediaSubtypesRawValue: asset.mediaSubtypes.rawValue,
             creationDate: asset.creationDate,
-            addedDate: asset.addedDate,
+            addedDate: asset.creationDate,
             pixelWidth: asset.pixelWidth,
             pixelHeight: asset.pixelHeight
         )

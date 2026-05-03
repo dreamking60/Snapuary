@@ -1,0 +1,365 @@
+project:
+  name: Snapuary
+  source_of_truth:
+    project_spec: project.yml
+    generated_project: Snapuary.xcodeproj
+  primary_domains:
+    - screenshot library governance
+    - screenshot cleanup scheduling
+    - watermark privacy inspection
+
+files:
+  - path: project.yml
+    role: XcodeGen project specification and target definition.
+    symbols:
+      - name: options
+        kind: config
+        purpose: Defines Xcode version compatibility, generated project format, and deployment target.
+      - name: targets.Snapuary
+        kind: target
+        purpose: Main iOS application target.
+      - name: targets.SnapuaryTests
+        kind: target
+        purpose: Unit test bundle target.
+
+  - path: scripts/bootstrap_ios.sh
+    role: Local bootstrap script for generating an Xcode project from project.yml.
+    symbols:
+      - name: xcodegen generate
+        kind: command
+        purpose: Regenerates Snapuary.xcodeproj from the XcodeGen spec.
+      - name: project format normalization
+        kind: command
+        purpose: Rewrites generated project format fields so Xcode 15.4 can open the project.
+
+  - path: App/Core/Models/MediaAsset.swift
+    role: Core media domain model and retention-rule logic.
+    symbols:
+      - name: MediaAsset
+        kind: struct
+        purpose: Canonical in-app representation of a photo or screenshot item.
+      - name: MediaAssetKind
+        kind: enum
+        purpose: Distinguishes system screenshots, imported screenshot-like assets, and normal photos.
+      - name: MediaTag
+        kind: struct
+        purpose: Represents a user-defined tag attached to a media asset.
+      - name: ScreenshotRetentionRule
+        kind: struct
+        purpose: Encodes how long a screenshot should be kept and which date anchor it uses.
+      - name: ScreenshotRetentionRule.expirationDate(createdAt:addedAt:)
+        kind: function
+        purpose: Computes the effective expiration date for a media asset from the configured rule.
+
+  - path: App/Core/Models/WatermarkScanResult.swift
+    role: Output model for privacy/watermark inspection results.
+    symbols:
+      - name: WatermarkScanResult
+        kind: struct
+        purpose: Stores one inspection result for a screenshot, including risk level and summary data.
+      - name: PrivacyRiskLevel
+        kind: enum
+        purpose: Classifies privacy severity for watermark findings.
+
+  - path: App/Core/Services/PhotoLibraryServing.swift
+    role: Photo library abstraction layer and PhotoKit adapter.
+    symbols:
+      - name: PhotoLibraryServing
+        kind: protocol
+        purpose: Defines app-facing photo library operations for authorization, reading, and deletion.
+      - name: PhotoLibraryAuthorizationStatus
+        kind: enum
+        purpose: Normalizes system photo permission states into app-owned states.
+      - name: PhotoLibraryError
+        kind: enum
+        purpose: Defines app-level errors for photo access and deletion flows.
+      - name: MockPhotoLibraryService
+        kind: struct
+        purpose: Supplies deterministic in-memory sample assets for previews and early development.
+      - name: PhotoKitPhotoLibraryService
+        kind: struct
+        purpose: Bridges the app to PhotoKit for real photo library access.
+      - name: PhotoKitPhotoLibraryService.authorizationStatus()
+        kind: function
+        purpose: Reads current photo permission state from PhotoKit.
+      - name: PhotoKitPhotoLibraryService.requestAuthorization()
+        kind: function
+        purpose: Requests photo access from the system and returns the normalized result.
+      - name: PhotoKitPhotoLibraryService.fetchAssets()
+        kind: function
+        purpose: Loads image assets from the photo library and maps them into MediaAsset values.
+      - name: PhotoKitPhotoLibraryService.deleteAssets(withLocalIdentifiers:)
+        kind: function
+        purpose: Deletes photo library assets through PhotoKit change requests.
+      - name: PhotoKitPhotoLibraryService.map(asset:)
+        kind: function
+        purpose: Converts a PHAsset into an intermediate descriptor-backed MediaAsset.
+      - name: PhotoKitPhotoLibraryService.map(descriptor:)
+        kind: function
+        purpose: Applies screenshot classification and default retention policy to one descriptor.
+      - name: MetadataMergingPhotoLibraryService
+        kind: struct
+        purpose: Merges raw PhotoKit assets with app-owned metadata such as tags, overrides, and protection state.
+      - name: MetadataMergingPhotoLibraryService.fetchAssets()
+        kind: function
+        purpose: Fetches base assets and stored metadata concurrently, then merges them into display-ready assets.
+      - name: PhotoLibraryAssetDescriptor
+        kind: struct
+        purpose: Captures the subset of asset data needed for classification and title generation.
+      - name: PhotoLibraryAssetDescriptor.defaultTitle(for:)
+        kind: function
+        purpose: Builds a human-readable default title for a mapped asset.
+
+  - path: App/Core/Services/MediaAssetMetadataServing.swift
+    role: Persistence layer for app-owned metadata that PhotoKit does not store.
+    symbols:
+      - name: MediaAssetMetadataServing
+        kind: protocol
+        purpose: Defines reading, saving, and deleting metadata by photo library identifier.
+      - name: MediaAssetMetadataRecord
+        kind: struct
+        purpose: Stores imported-screenshot override, tags, retention rule override, and protection flag.
+      - name: FileBackedMediaAssetMetadataStore
+        kind: actor
+        purpose: Persists metadata records to a JSON file with serialized actor access.
+      - name: fetchAllMetadata()
+        kind: function
+        purpose: Loads and decodes all persisted metadata records.
+      - name: saveMetadata(_:for:)
+        kind: function
+        purpose: Writes or updates one metadata record for a library asset.
+      - name: removeMetadata(for:)
+        kind: function
+        purpose: Deletes metadata records for removed assets.
+
+  - path: App/Core/Services/ScreenshotExpirationServing.swift
+    role: Business rules for cleanup summaries and expiration candidate selection.
+    symbols:
+      - name: ScreenshotExpirationServing
+        kind: protocol
+        purpose: Defines logic that summarizes pending cleanup and chooses assets to delete.
+      - name: CleanupSummary
+        kind: struct
+        purpose: Aggregates counts of screenshots, protected items, and due cleanup work.
+      - name: CleanupExecutionResult
+        kind: struct
+        purpose: Records the result of a cleanup run.
+      - name: MockScreenshotExpirationService
+        kind: struct
+        purpose: Current implementation of expiration rules used by the app and tests.
+      - name: upcomingCleanupSummary(for:)
+        kind: function
+        purpose: Calculates top-line cleanup counts for the current asset list.
+      - name: cleanupCandidates(from:now:)
+        kind: function
+        purpose: Filters assets down to the screenshots that are expired and not protected.
+
+  - path: App/Core/Services/CleanupSchedulingServing.swift
+    role: Notification scheduling abstraction for future cleanup reminders.
+    symbols:
+      - name: CleanupSchedulingServing
+        kind: protocol
+        purpose: Defines notification permission and reminder scheduling APIs.
+      - name: CleanupNotificationAuthorizationStatus
+        kind: enum
+        purpose: Normalizes local notification permission states.
+      - name: CleanupReminderSchedule
+        kind: struct
+        purpose: Describes one scheduled reminder and the number of assets it represents.
+      - name: UserNotificationCleanupScheduler
+        kind: actor
+        purpose: Schedules the nearest future cleanup reminder through UserNotifications.
+      - name: authorizationStatus()
+        kind: function
+        purpose: Reads current notification permission state.
+      - name: requestAuthorization()
+        kind: function
+        purpose: Requests notification permission from the user.
+      - name: scheduleNextCleanupReminder(for:now:)
+        kind: function
+        purpose: Picks the nearest future cleanup date and schedules a reminder for it.
+
+  - path: App/Core/Services/WatermarkInspecting.swift
+    role: Abstraction for screenshot privacy analysis.
+    symbols:
+      - name: WatermarkInspecting
+        kind: protocol
+        purpose: Defines the interface for reading watermark/privacy scan results.
+      - name: MockWatermarkInspector
+        kind: struct
+        purpose: Returns stub inspection results while the real scanner is not implemented.
+      - name: recentResults()
+        kind: function
+        purpose: Loads the latest privacy scan results for display.
+
+  - path: App/Core/DesignSystem/SnapuaryCard.swift
+    role: Reusable visual container for consistent card styling.
+    symbols:
+      - name: SnapuaryCard
+        kind: struct
+        purpose: Wraps child content in the app's common card presentation.
+
+  - path: App/Features/Library/LibraryHomeViewModel.swift
+    role: State and command model for the screenshot/photo library screen.
+    symbols:
+      - name: TagLibraryEntry
+        kind: struct
+        purpose: Represents one reusable tag suggestion with usage statistics.
+      - name: LibraryHomeViewModel
+        kind: observable
+        purpose: Owns library screen state, filters, metadata editing, cleanup, and reminder scheduling.
+      - name: load()
+        kind: function
+        purpose: Fetches assets and initializes the library screen state.
+      - name: requestPhotoLibraryAccess()
+        kind: function
+        purpose: Prompts for photo permission and reloads data when access is granted.
+      - name: toggleTag(_:)
+        kind: function
+        purpose: Applies or removes a tag filter from the current library view.
+      - name: clearFilters()
+        kind: function
+        purpose: Resets active filters back to the default library state.
+      - name: toggleProtection(for:)
+        kind: function
+        purpose: Marks or unmarks an asset as protected from cleanup.
+      - name: toggleImportedScreenshotLike(for:)
+        kind: function
+        purpose: Promotes a normal photo into the imported-screenshot-like category or reverses it.
+      - name: applyRetentionRule(_:to:)
+        kind: function
+        purpose: Persists a new retention rule for one asset.
+      - name: addTag(name:colorHex:to:)
+        kind: function
+        purpose: Creates a new tag and attaches it to an asset.
+      - name: addTags(_:to:)
+        kind: function
+        purpose: Applies several existing library tag suggestions to one asset.
+      - name: removeTag(_:from:)
+        kind: function
+        purpose: Removes one tag from an asset.
+      - name: runCleanupNow()
+        kind: function
+        purpose: Deletes expired unprotected screenshots and removes their metadata.
+      - name: requestCleanupReminderPermission()
+        kind: function
+        purpose: Prompts for local notification access used by cleanup reminders.
+      - name: scheduleNextCleanupReminder()
+        kind: function
+        purpose: Asks the scheduler to queue the next reminder based on current assets.
+
+  - path: App/Features/Library/LibraryHomeView.swift
+    role: SwiftUI screen for browsing, filtering, tagging, and cleaning screenshot assets.
+    symbols:
+      - name: LibraryHomeView
+        kind: struct
+        purpose: Renders the library feature UI and binds user actions to LibraryHomeViewModel.
+
+  - path: App/Features/WatermarkPrivacy/WatermarkPrivacyViewModel.swift
+    role: State and loading logic for the privacy inspection screen.
+    symbols:
+      - name: WatermarkPrivacyViewModel
+        kind: observable
+        purpose: Owns privacy-scan loading state and exposes results to the view.
+      - name: load()
+        kind: function
+        purpose: Fetches recent watermark scan results from the inspector service.
+
+  - path: App/Features/WatermarkPrivacy/WatermarkPrivacyView.swift
+    role: SwiftUI screen for displaying privacy scan output.
+    symbols:
+      - name: WatermarkPrivacyView
+        kind: struct
+        purpose: Presents watermark/privacy scan results to the user.
+
+  - path: App/SnapuaryApp/AppContainer.swift
+    role: Application-level dependency container.
+    symbols:
+      - name: AppContainer
+        kind: struct
+        purpose: Constructs the concrete service graph used by root view models.
+
+  - path: App/SnapuaryApp/RootTabViewModel.swift
+    role: Root navigation state and screen-specific view model factory.
+    symbols:
+      - name: RootTab
+        kind: enum
+        purpose: Enumerates the app's top-level tabs.
+      - name: RootTabViewModel
+        kind: observable
+        purpose: Tracks the selected tab and creates child feature view models.
+      - name: makeLibraryViewModel()
+        kind: function
+        purpose: Builds the library feature view model from shared dependencies.
+      - name: makeWatermarkViewModel()
+        kind: function
+        purpose: Builds the privacy feature view model from shared dependencies.
+
+  - path: App/SnapuaryApp/RootTabView.swift
+    role: Root SwiftUI tab container.
+    symbols:
+      - name: RootTabView
+        kind: struct
+        purpose: Hosts the Library and Privacy tabs and binds them to the root view model.
+
+  - path: App/SnapuaryApp/SnapuaryApp.swift
+    role: Main app entry point.
+    symbols:
+      - name: SnapuaryApp
+        kind: struct
+        purpose: Bootstraps dependencies and launches the root tab interface.
+
+  - path: Tests/SnapuaryTests/SnapuaryTests.swift
+    role: Unit tests for retention rules, metadata merge, tag editing, cleanup logic, and reminder scheduling.
+    symbols:
+      - name: SnapuaryTests
+        kind: test_case
+        purpose: Verifies the app's core business rules under Xcode 15.4 using XCTest.
+      - name: cleanupSummaryCountsProtectedItems()
+        kind: test
+        purpose: Confirms protected screenshot counts are included in cleanup summaries.
+      - name: importedScreenshotLikeCanExpireFromAddedDate()
+        kind: test
+        purpose: Confirms imported screenshot-like assets can expire from added-date anchoring.
+      - name: fixedDateRetentionRuleReturnsExplicitDate()
+        kind: test
+        purpose: Confirms fixed-date retention rules return the configured expiration date.
+      - name: photoKitDescriptorMapsScreenshotSubtypeToSystemScreenshot()
+        kind: test
+        purpose: Confirms PhotoKit screenshot subtype maps to system screenshot classification.
+      - name: photoKitDescriptorMapsRegularImageToPhoto()
+        kind: test
+        purpose: Confirms normal images map to the plain photo classification.
+      - name: metadataMergeCanPromotePhotoToImportedScreenshotLike()
+        kind: test
+        purpose: Confirms persisted metadata can reclassify a photo as imported screenshot-like.
+      - name: fileBackedMetadataStoreRoundTripsRecords()
+        kind: test
+        purpose: Confirms metadata persistence can save and reload records.
+      - name: libraryHomeViewModelCanAddAndRemoveTag()
+        kind: test
+        purpose: Confirms tag mutation flows update library state correctly.
+      - name: tagLibraryOrdersByUsageCount()
+        kind: test
+        purpose: Confirms tag suggestion ordering favors the most-used tags.
+      - name: libraryHomeViewModelCanBatchApplyGlobalTags()
+        kind: test
+        purpose: Confirms global tag suggestions can be batch-applied to one asset.
+      - name: expirationServiceReturnsOnlyExpiredUnprotectedScreenshots()
+        kind: test
+        purpose: Confirms cleanup candidate selection excludes protected and unexpired screenshots.
+      - name: libraryHomeViewModelCleanupRemovesExpiredAssetsAndMetadata()
+        kind: test
+        purpose: Confirms cleanup removes both library assets and persisted metadata.
+      - name: cleanupSchedulerSchedulesNearestFutureExpiration()
+        kind: test
+        purpose: Confirms reminder scheduling chooses the nearest future cleanup date.
+      - name: InMemoryMediaAssetMetadataStore
+        kind: actor
+        purpose: Test double for metadata persistence.
+      - name: InMemoryPhotoLibraryService
+        kind: class
+        purpose: Test double for photo library reads and deletions.
+      - name: InMemoryCleanupSchedulingService
+        kind: actor
+        purpose: Test double for cleanup reminder scheduling.

@@ -1,11 +1,12 @@
 name: Snapuary
 options:
+  projectFormat: 60
+  xcodeVersion: "15.4"
   bundleIdPrefix: com.dreamking
   deploymentTarget:
     iOS: "17.0"
 settings:
   base:
-    PRODUCT_NAME: Snapuary
     SWIFT_VERSION: 5.10
     MARKETING_VERSION: 0.1.0
     CURRENT_PROJECT_VERSION: 1
@@ -24,6 +25,7 @@ targets:
       - path: App
     settings:
       base:
+        PRODUCT_NAME: Snapuary
         PRODUCT_BUNDLE_IDENTIFIER: com.dreamking.snapuary
         TARGETED_DEVICE_FAMILY: 1,2
         SUPPORTS_MACCATALYST: NO
@@ -36,6 +38,8 @@ targets:
     platform: iOS
     sources:
       - path: Tests/SnapuaryTests
+    settings:
+      base:
+        PRODUCT_NAME: SnapuaryTests
     dependencies:
       - target: Snapuary
-

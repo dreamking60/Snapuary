@@ -1,9 +1,8 @@
 import Photos
-import Testing
+import XCTest
 @testable import Snapuary
 
-struct SnapuaryTests {
-    @Test
+final class SnapuaryTests: XCTestCase {
     func cleanupSummaryCountsProtectedItems() {
         let service = MockScreenshotExpirationService()
         let assets = [
@@ -24,12 +23,11 @@ struct SnapuaryTests {
         ]
 
         let summary = service.upcomingCleanupSummary(for: assets)
-        #expect(summary.protectedCount == 1)
-        #expect(summary.totalScreenshotCount == 1)
+        XCTAssertEqual(summary.protectedCount, 1)
+        XCTAssertEqual(summary.totalScreenshotCount, 1)
     }
 
-    @Test
-    func importedScreenshotLikeCanExpireFromAddedDate() {
+    func importedScreenshotLikeCanExpireFromAddedDate() throws {
         let asset = MediaAsset(
             id: UUID(),
             libraryIdentifier: nil,
@@ -45,12 +43,11 @@ struct SnapuaryTests {
             isProtectedFromCleanup: false
         )
 
-        let expirationDate = try #require(asset.expirationDate)
+        let expirationDate = try XCTUnwrap(asset.expirationDate)
         let expectedDate = Calendar.current.date(byAdding: .day, value: 30, to: asset.addedAt)
-        #expect(Calendar.current.isDate(expirationDate, equalTo: expectedDate ?? expirationDate, toGranularity: .day))
+        XCTAssertTrue(Calendar.current.isDate(expirationDate, equalTo: expectedDate ?? expirationDate, toGranularity: .day))
     }
 
-    @Test
     func fixedDateRetentionRuleReturnsExplicitDate() throws {
         let fixedDate = Date.now.addingTimeInterval(86_400 * 45)
         let asset = MediaAsset(
@@ -65,11 +62,10 @@ struct SnapuaryTests {
             isProtectedFromCleanup: false
         )
 
-        let expirationDate = try #require(asset.expirationDate)
-        #expect(Calendar.current.isDate(expirationDate, equalTo: fixedDate, toGranularity: .day))
+        let expirationDate = try XCTUnwrap(asset.expirationDate)
+        XCTAssertTrue(Calendar.current.isDate(expirationDate, equalTo: fixedDate, toGranularity: .day))
     }
 
-    @Test
     func photoKitDescriptorMapsScreenshotSubtypeToSystemScreenshot() {
         let descriptor = PhotoLibraryAssetDescriptor(
             localIdentifier: "asset-1",
@@ -81,11 +77,10 @@ struct SnapuaryTests {
         )
 
         let asset = PhotoKitPhotoLibraryService.map(descriptor: descriptor)
-        #expect(asset.kind == .systemScreenshot)
-        #expect(asset.screenshotRule?.displayName == "30 Days")
+        XCTAssertEqual(asset.kind, .systemScreenshot)
+        XCTAssertEqual(asset.screenshotRule?.displayName, "30 Days")
     }
 
-    @Test
     func photoKitDescriptorMapsRegularImageToPhoto() {
         let descriptor = PhotoLibraryAssetDescriptor(
             localIdentifier: "asset-2",
@@ -97,11 +92,10 @@ struct SnapuaryTests {
         )
 
         let asset = PhotoKitPhotoLibraryService.map(descriptor: descriptor)
-        #expect(asset.kind == .photo)
-        #expect(asset.screenshotRule == nil)
+        XCTAssertEqual(asset.kind, .photo)
+        XCTAssertNil(asset.screenshotRule)
     }
 
-    @Test
     func metadataMergeCanPromotePhotoToImportedScreenshotLike() async throws {
         let base = MockPhotoLibraryService()
         let metadataStore = InMemoryMediaAssetMetadataStore(records: [
@@ -118,14 +112,13 @@ struct SnapuaryTests {
 
         let service = MetadataMergingPhotoLibraryService(base: base, metadataStore: metadataStore)
         let assets = try await service.fetchAssets()
-        let asset = try #require(assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
+        let asset = try XCTUnwrap(assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
 
-        #expect(asset.kind == .importedScreenshotLike)
-        #expect(asset.tags.map(\.name) == ["Imported"])
-        #expect(asset.screenshotRule?.displayName == "30 Days")
+        XCTAssertEqual(asset.kind, .importedScreenshotLike)
+        XCTAssertEqual(asset.tags.map(\.name), ["Imported"])
+        XCTAssertEqual(asset.screenshotRule?.displayName, "30 Days")
     }
 
-    @Test
     func fileBackedMetadataStoreRoundTripsRecords() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -141,10 +134,9 @@ struct SnapuaryTests {
         try await store.saveMetadata(record, for: "asset-3")
         let records = try await store.fetchAllMetadata()
 
-        #expect(records["asset-3"] == record)
+        XCTAssertEqual(records["asset-3"], record)
     }
 
-    @Test
     func libraryHomeViewModelCanAddAndRemoveTag() async throws {
         let metadataStore = InMemoryMediaAssetMetadataStore()
         let viewModel = LibraryHomeViewModel(
@@ -155,19 +147,18 @@ struct SnapuaryTests {
         )
 
         await viewModel.load()
-        let asset = try #require(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
+        let asset = try XCTUnwrap(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
 
         await viewModel.addTag(name: "Travel", colorHex: "#00AAFF", to: asset)
-        let taggedAsset = try #require(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
-        let newTag = try #require(taggedAsset.tags.first(where: { $0.name == "Travel" }))
-        #expect(taggedAsset.tags.contains(where: { $0.name == "Travel" }))
+        let taggedAsset = try XCTUnwrap(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
+        let newTag = try XCTUnwrap(taggedAsset.tags.first(where: { $0.name == "Travel" }))
+        XCTAssertTrue(taggedAsset.tags.contains(where: { $0.name == "Travel" }))
 
         await viewModel.removeTag(newTag, from: taggedAsset)
-        let cleanedAsset = try #require(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
-        #expect(!cleanedAsset.tags.contains(where: { $0.name == "Travel" }))
+        let cleanedAsset = try XCTUnwrap(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
+        XCTAssertFalse(cleanedAsset.tags.contains(where: { $0.name == "Travel" }))
     }
 
-    @Test
     func tagLibraryOrdersByUsageCount() async throws {
         let photoLibraryService = InMemoryPhotoLibraryService(assets: [
             MediaAsset(
@@ -208,11 +199,10 @@ struct SnapuaryTests {
         await viewModel.load()
         let library = viewModel.tagLibrary
 
-        #expect(library.first?.name == "Finance")
-        #expect(library.first?.usageCount == 2)
+        XCTAssertEqual(library.first?.name, "Finance")
+        XCTAssertEqual(library.first?.usageCount, 2)
     }
 
-    @Test
     func libraryHomeViewModelCanBatchApplyGlobalTags() async throws {
         let metadataStore = InMemoryMediaAssetMetadataStore()
         let viewModel = LibraryHomeViewModel(
@@ -223,7 +213,7 @@ struct SnapuaryTests {
         )
 
         await viewModel.load()
-        let asset = try #require(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
+        let asset = try XCTUnwrap(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
         let tags = [
             TagLibraryEntry(
                 id: "finance",
@@ -242,13 +232,12 @@ struct SnapuaryTests {
         ]
 
         await viewModel.addTags(tags, to: asset)
-        let updatedAsset = try #require(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
+        let updatedAsset = try XCTUnwrap(viewModel.assets.first(where: { $0.libraryIdentifier == "mock-photo-1" }))
 
-        #expect(updatedAsset.tags.contains(where: { $0.name == "Finance" }))
-        #expect(updatedAsset.tags.contains(where: { $0.name == "Reference" }))
+        XCTAssertTrue(updatedAsset.tags.contains(where: { $0.name == "Finance" }))
+        XCTAssertTrue(updatedAsset.tags.contains(where: { $0.name == "Reference" }))
     }
 
-    @Test
     func expirationServiceReturnsOnlyExpiredUnprotectedScreenshots() {
         let service = MockScreenshotExpirationService()
         let assets = [
@@ -288,10 +277,9 @@ struct SnapuaryTests {
         ]
 
         let candidates = service.cleanupCandidates(from: assets, now: .now)
-        #expect(candidates.compactMap(\.libraryIdentifier) == ["expired-shot"])
+        XCTAssertEqual(candidates.compactMap(\.libraryIdentifier), ["expired-shot"])
     }
 
-    @Test
     func libraryHomeViewModelCleanupRemovesExpiredAssetsAndMetadata() async throws {
         let photoLibraryService = InMemoryPhotoLibraryService(assets: [
             MediaAsset(
@@ -322,17 +310,16 @@ struct SnapuaryTests {
         )
 
         await viewModel.load()
-        #expect(viewModel.cleanupCandidates.count == 1)
+        XCTAssertEqual(viewModel.cleanupCandidates.count, 1)
 
         await viewModel.runCleanupNow()
 
-        #expect(viewModel.assets.isEmpty)
+        XCTAssertTrue(viewModel.assets.isEmpty)
         let records = try await metadataStore.fetchAllMetadata()
-        #expect(records["cleanup-1"] == nil)
-        #expect(viewModel.lastCleanupResult?.deletedCount == 1)
+        XCTAssertNil(records["cleanup-1"])
+        XCTAssertEqual(viewModel.lastCleanupResult?.deletedCount, 1)
     }
 
-    @Test
     func cleanupSchedulerSchedulesNearestFutureExpiration() async throws {
         let scheduler = InMemoryCleanupSchedulingService()
         let assets = [
@@ -354,7 +341,7 @@ struct SnapuaryTests {
             now: .now.addingTimeInterval(-60)
         )
 
-        #expect(reminder?.candidateCount == 1)
+        XCTAssertEqual(reminder?.candidateCount, 1)
     }
 }
 
@@ -380,7 +367,7 @@ actor InMemoryMediaAssetMetadataStore: MediaAssetMetadataServing {
     }
 }
 
-actor InMemoryPhotoLibraryService: PhotoLibraryServing {
+final class InMemoryPhotoLibraryService: PhotoLibraryServing {
     private var assets: [MediaAsset]
 
     init(assets: [MediaAsset]) {

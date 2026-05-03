@@ -282,7 +282,7 @@ private struct AssetRow: View {
                         Spacer()
                         if asset.isProtectedFromCleanup {
                             Image(systemName: "bookmark.fill")
-                                .foregroundStyle(.accent)
+                                .foregroundStyle(Color.accentColor)
                         }
                     }
 
@@ -591,7 +591,7 @@ private struct AssetTagManagerView: View {
                                 )
                                 Spacer()
                                 Image(systemName: selectedBatchTagIDs.contains(entry.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selectedBatchTagIDs.contains(entry.id) ? .accent : .tertiary)
+                                    .foregroundStyle(selectedBatchTagIDs.contains(entry.id) ? Color.accentColor : Color(uiColor: .tertiaryLabel))
                             }
                         }
                         .buttonStyle(.plain)
