@@ -37,7 +37,7 @@ final class SnapuaryTests: XCTestCase {
             tags: [],
             kind: .importedScreenshotLike,
             screenshotRule: ScreenshotRetentionRule(
-                mode: .customDays(30),
+                mode: .preset(.oneMonth),
                 anchor: .addedDate
             ),
             isProtectedFromCleanup: false
@@ -48,8 +48,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertTrue(Calendar.current.isDate(expirationDate, equalTo: expectedDate ?? expirationDate, toGranularity: .day))
     }
 
-    func fixedDateRetentionRuleReturnsExplicitDate() throws {
-        let fixedDate = Date.now.addingTimeInterval(86_400 * 45)
+    func customMinuteRetentionRuleReturnsExplicitMinuteOffset() throws {
         let asset = MediaAsset(
             id: UUID(),
             libraryIdentifier: nil,
@@ -58,12 +57,13 @@ final class SnapuaryTests: XCTestCase {
             addedAt: .now,
             tags: [],
             kind: .systemScreenshot,
-            screenshotRule: ScreenshotRetentionRule(mode: .expiresAt(fixedDate), anchor: .creationDate),
+            screenshotRule: ScreenshotRetentionRule(mode: .customMinutes(5), anchor: .creationDate),
             isProtectedFromCleanup: false
         )
 
         let expirationDate = try XCTUnwrap(asset.expirationDate)
-        XCTAssertTrue(Calendar.current.isDate(expirationDate, equalTo: fixedDate, toGranularity: .day))
+        let expectedDate = try XCTUnwrap(Calendar.current.date(byAdding: .minute, value: 5, to: asset.createdAt))
+        XCTAssertEqual(expirationDate.timeIntervalSince1970, expectedDate.timeIntervalSince1970, accuracy: 1)
     }
 
     func photoKitDescriptorMapsScreenshotSubtypeToSystemScreenshot() {
@@ -73,12 +73,14 @@ final class SnapuaryTests: XCTestCase {
             creationDate: .now.addingTimeInterval(-3_600),
             addedDate: .now.addingTimeInterval(-1_800),
             pixelWidth: 1179,
-            pixelHeight: 2556
+            pixelHeight: 2556,
+            originalFilename: "IMG_0001.PNG",
+            isInSystemScreenshotAlbum: false
         )
 
         let asset = PhotoKitPhotoLibraryService.map(descriptor: descriptor)
         XCTAssertEqual(asset.kind, .systemScreenshot)
-        XCTAssertEqual(asset.screenshotRule?.displayName, "30 Days")
+        XCTAssertEqual(asset.screenshotRule?.displayName, "1 Month")
     }
 
     func photoKitDescriptorMapsRegularImageToPhoto() {
@@ -88,12 +90,31 @@ final class SnapuaryTests: XCTestCase {
             creationDate: .now,
             addedDate: .now,
             pixelWidth: 4032,
-            pixelHeight: 3024
+            pixelHeight: 3024,
+            originalFilename: "IMG_0002.JPG",
+            isInSystemScreenshotAlbum: false
         )
 
         let asset = PhotoKitPhotoLibraryService.map(descriptor: descriptor)
         XCTAssertEqual(asset.kind, .photo)
         XCTAssertNil(asset.screenshotRule)
+    }
+
+    func screenshotAlbumMembershipCanPromoteImageToScreenshot() {
+        let descriptor = PhotoLibraryAssetDescriptor(
+            localIdentifier: "asset-3",
+            mediaSubtypesRawValue: 0,
+            creationDate: .now,
+            addedDate: .now,
+            pixelWidth: 1290,
+            pixelHeight: 2796,
+            originalFilename: "Screenshot 2026-05-03 at 01.00.00.png",
+            isInSystemScreenshotAlbum: true
+        )
+
+        let asset = PhotoKitPhotoLibraryService.map(descriptor: descriptor)
+        XCTAssertEqual(asset.kind, .systemScreenshot)
+        XCTAssertEqual(asset.screenshotRule?.displayName, "1 Month")
     }
 
     func metadataMergeCanPromotePhotoToImportedScreenshotLike() async throws {
@@ -103,7 +124,7 @@ final class SnapuaryTests: XCTestCase {
                 isImportedScreenshotLike: true,
                 tags: [MediaTag(id: UUID(), name: "Imported", colorHex: "#123456")],
                 screenshotRule: ScreenshotRetentionRule(
-                    mode: .preset(.thirtyDays),
+                    mode: .preset(.oneMonth),
                     anchor: .addedDate
                 ),
                 isProtectedFromCleanup: false
@@ -116,7 +137,7 @@ final class SnapuaryTests: XCTestCase {
 
         XCTAssertEqual(asset.kind, .importedScreenshotLike)
         XCTAssertEqual(asset.tags.map(\.name), ["Imported"])
-        XCTAssertEqual(asset.screenshotRule?.displayName, "30 Days")
+        XCTAssertEqual(asset.screenshotRule?.displayName, "1 Month")
     }
 
     func fileBackedMetadataStoreRoundTripsRecords() async throws {
@@ -127,7 +148,7 @@ final class SnapuaryTests: XCTestCase {
         let record = MediaAssetMetadataRecord(
             isImportedScreenshotLike: true,
             tags: [MediaTag(id: UUID(), name: "Finance", colorHex: "#AAAAAA")],
-            screenshotRule: ScreenshotRetentionRule(mode: .customDays(45), anchor: .addedDate),
+            screenshotRule: ScreenshotRetentionRule(mode: .customMinutes(45), anchor: .addedDate),
             isProtectedFromCleanup: true
         )
 
@@ -331,7 +352,7 @@ final class SnapuaryTests: XCTestCase {
                 addedAt: .now,
                 tags: [],
                 kind: .systemScreenshot,
-                screenshotRule: ScreenshotRetentionRule(mode: .customDays(1), anchor: .creationDate),
+                screenshotRule: ScreenshotRetentionRule(mode: .preset(.oneDay), anchor: .creationDate),
                 isProtectedFromCleanup: false
             )
         ]

@@ -11,16 +11,15 @@ struct RootTabView: View {
         TabView(selection: $viewModel.selectedTab) {
             LibraryHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label("Library", systemImage: "photo.on.rectangle.angled")
+                    Label("Library", systemImage: "photo.stack")
                 }
                 .tag(RootTab.library)
 
-            WatermarkPrivacyView(viewModel: viewModel.makeWatermarkViewModel())
+            CleanupHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label("Privacy", systemImage: "shield.lefthalf.filled")
+                    Label("Cleanup", systemImage: "trash")
                 }
-                .tag(RootTab.privacy)
+                .tag(RootTab.cleanup)
         }
     }
 }
-

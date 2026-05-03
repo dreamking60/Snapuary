@@ -3,21 +3,17 @@ import Observation
 
 enum RootTab: Hashable {
     case library
-    case privacy
+    case cleanup
 }
 
 @Observable
 final class RootTabViewModel {
     var selectedTab: RootTab = .library
 
-    private let container: AppContainer
+    private let libraryViewModel: LibraryHomeViewModel
 
     init(container: AppContainer) {
-        self.container = container
-    }
-
-    func makeLibraryViewModel() -> LibraryHomeViewModel {
-        LibraryHomeViewModel(
+        self.libraryViewModel = LibraryHomeViewModel(
             photoLibraryService: container.photoLibraryService,
             metadataService: container.metadataService,
             expirationService: container.expirationService,
@@ -25,7 +21,7 @@ final class RootTabViewModel {
         )
     }
 
-    func makeWatermarkViewModel() -> WatermarkPrivacyViewModel {
-        WatermarkPrivacyViewModel(watermarkInspector: container.watermarkInspector)
+    func makeLibraryViewModel() -> LibraryHomeViewModel {
+        libraryViewModel
     }
 }

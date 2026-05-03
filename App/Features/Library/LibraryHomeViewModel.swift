@@ -1,6 +1,25 @@
 import Foundation
 import Observation
 
+enum LibraryCollection: String, CaseIterable, Hashable, Identifiable {
+    case all
+    case screenshots
+    case photos
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            "All"
+        case .screenshots:
+            "Screenshots"
+        case .photos:
+            "Photos"
+        }
+    }
+}
+
 struct TagLibraryEntry: Identifiable, Hashable {
     let id: String
     let name: String
@@ -33,8 +52,11 @@ final class LibraryHomeViewModel {
     private(set) var isLoading = false
     private(set) var isRunningCleanup = false
     private(set) var isSchedulingReminder = false
+    private(set) var shouldPromptForCleanup = false
     var searchText = ""
     var selectedTag: MediaTag?
+    var selectedCollection: LibraryCollection = .all
+    private var hasPromptedForCleanupThisSession = false
 
     init(
         photoLibraryService: PhotoLibraryServing,
@@ -77,6 +99,7 @@ final class LibraryHomeViewModel {
             cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
             cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
             nextCleanupReminder = nil
+            updateCleanupPromptState()
         } catch {
             assets = []
             authorizationErrorMessage = "Failed to load photos from the library."
@@ -89,6 +112,7 @@ final class LibraryHomeViewModel {
             )
             cleanupCandidates = []
             nextCleanupReminder = nil
+            shouldPromptForCleanup = false
         }
     }
 
@@ -153,6 +177,25 @@ final class LibraryHomeViewModel {
         filteredAssets.filter { !$0.isScreenshot }
     }
 
+    var visibleAssets: [MediaAsset] {
+        switch selectedCollection {
+        case .all:
+            filteredAssets
+        case .screenshots:
+            screenshotAssets
+        case .photos:
+            nonScreenshotAssets
+        }
+    }
+
+    var untaggedScreenshotAssets: [MediaAsset] {
+        screenshotAssets.filter { $0.tags.isEmpty && !$0.isProtectedFromCleanup }
+    }
+
+    var taggedScreenshotAssets: [MediaAsset] {
+        screenshotAssets.filter { !$0.tags.isEmpty }
+    }
+
     func toggleTag(_ tag: MediaTag) {
         if selectedTag?.normalizedName == tag.normalizedName {
             selectedTag = nil
@@ -184,7 +227,7 @@ final class LibraryHomeViewModel {
         if assets[index].kind == .photo {
             assets[index].kind = .importedScreenshotLike
             assets[index].screenshotRule = ScreenshotRetentionRule(
-                mode: .preset(.thirtyDays),
+                mode: .preset(.oneMonth),
                 anchor: .addedDate
             )
         } else if assets[index].kind == .importedScreenshotLike {
@@ -262,6 +305,8 @@ final class LibraryHomeViewModel {
             return
         }
 
+        shouldPromptForCleanup = false
+
         let candidates = expirationService.cleanupCandidates(from: assets, now: .now)
         guard !candidates.isEmpty else {
             lastCleanupResult = CleanupExecutionResult(deletedCount: 0, deletedAssetTitles: [])
@@ -290,6 +335,19 @@ final class LibraryHomeViewModel {
         } catch {
             authorizationErrorMessage = "Cleanup failed while deleting expired screenshots."
         }
+    }
+
+    func dismissCleanupPrompt() {
+        shouldPromptForCleanup = false
+        hasPromptedForCleanupThisSession = true
+    }
+
+    var cleanupPromptTitle: String {
+        "Ready to Clean \(cleanupCandidates.count) Screenshot\(cleanupCandidates.count == 1 ? "" : "s")?"
+    }
+
+    var cleanupPromptMessage: String {
+        "Snapuary found expired screenshots in the system Photos library. Confirm to delete them now."
     }
 
     func requestCleanupReminderPermission() async {
@@ -374,5 +432,15 @@ final class LibraryHomeViewModel {
     private func recalculateCleanupState() {
         cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
         cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
+        updateCleanupPromptState()
+    }
+
+    private func updateCleanupPromptState() {
+        guard !hasPromptedForCleanupThisSession else {
+            shouldPromptForCleanup = false
+            return
+        }
+
+        shouldPromptForCleanup = !cleanupCandidates.isEmpty
     }
 }

@@ -60,19 +60,18 @@ struct ScreenshotRetentionRule: Codable, Hashable {
     enum Mode: Codable, Hashable {
         case manualOnly
         case preset(RetentionPreset)
-        case customDays(Int)
-        case expiresAt(Date)
+        case customMinutes(Int)
 
         private enum CodingKeys: String, CodingKey {
             case kind
             case preset
-            case days
-            case date
+            case minutes
         }
 
         private enum Kind: String, Codable {
             case manualOnly
             case preset
+            case customMinutes
             case customDays
             case expiresAt
         }
@@ -80,16 +79,22 @@ struct ScreenshotRetentionRule: Codable, Hashable {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             let kind = try container.decode(Kind.self, forKey: .kind)
+            let legacyContainer = try decoder.container(keyedBy: LegacyCodingKey.self)
 
             switch kind {
             case .manualOnly:
                 self = .manualOnly
             case .preset:
                 self = .preset(try container.decode(RetentionPreset.self, forKey: .preset))
+            case .customMinutes:
+                self = .customMinutes(try container.decode(Int.self, forKey: .minutes))
             case .customDays:
-                self = .customDays(try container.decode(Int.self, forKey: .days))
+                let legacyDays = try legacyContainer.decode(Int.self, forKey: LegacyCodingKey("days"))
+                self = .customMinutes(max(legacyDays * 24 * 60, 1))
             case .expiresAt:
-                self = .expiresAt(try container.decode(Date.self, forKey: .date))
+                let legacyDate = try legacyContainer.decode(Date.self, forKey: LegacyCodingKey("date"))
+                let minutes = max(Int(legacyDate.timeIntervalSinceNow / 60), 1)
+                self = .customMinutes(minutes)
             }
         }
 
@@ -102,12 +107,9 @@ struct ScreenshotRetentionRule: Codable, Hashable {
             case .preset(let preset):
                 try container.encode(Kind.preset, forKey: .kind)
                 try container.encode(preset, forKey: .preset)
-            case .customDays(let days):
-                try container.encode(Kind.customDays, forKey: .kind)
-                try container.encode(days, forKey: .days)
-            case .expiresAt(let date):
-                try container.encode(Kind.expiresAt, forKey: .kind)
-                try container.encode(date, forKey: .date)
+            case .customMinutes(let minutes):
+                try container.encode(Kind.customMinutes, forKey: .kind)
+                try container.encode(minutes, forKey: .minutes)
             }
         }
     }
@@ -118,36 +120,50 @@ struct ScreenshotRetentionRule: Codable, Hashable {
     }
 
     enum RetentionPreset: String, Codable, Hashable, CaseIterable, Identifiable {
+        case oneDay
         case oneWeek
-        case thirtyDays
-        case threeMonths
-        case oneYear
+        case oneMonth
 
         var id: String { rawValue }
 
         var dayCount: Int {
             switch self {
+            case .oneDay:
+                1
             case .oneWeek:
                 7
-            case .thirtyDays:
+            case .oneMonth:
                 30
-            case .threeMonths:
-                90
-            case .oneYear:
-                365
             }
         }
 
         var displayName: String {
             switch self {
+            case .oneDay:
+                "1 Day"
             case .oneWeek:
                 "1 Week"
-            case .thirtyDays:
-                "30 Days"
-            case .threeMonths:
-                "3 Months"
-            case .oneYear:
-                "1 Year"
+            case .oneMonth:
+                "1 Month"
+            }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let rawValue = try container.decode(String.self)
+
+            switch rawValue {
+            case "oneDay":
+                self = .oneDay
+            case "oneWeek":
+                self = .oneWeek
+            case "oneMonth", "thirtyDays", "threeMonths", "oneYear":
+                self = .oneMonth
+            default:
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Unsupported retention preset: \(rawValue)"
+                )
             }
         }
     }
@@ -166,10 +182,8 @@ struct ScreenshotRetentionRule: Codable, Hashable {
             return nil
         case .preset(let preset):
             return Calendar.current.date(byAdding: .day, value: preset.dayCount, to: baseDate)
-        case .customDays(let days):
-            return Calendar.current.date(byAdding: .day, value: days, to: baseDate)
-        case .expiresAt(let date):
-            return date
+        case .customMinutes(let minutes):
+            return Calendar.current.date(byAdding: .minute, value: minutes, to: baseDate)
         }
     }
 
@@ -179,10 +193,25 @@ struct ScreenshotRetentionRule: Codable, Hashable {
             "Manual Only"
         case .preset(let preset):
             preset.displayName
-        case .customDays(let days):
-            "\(days) Days"
-        case .expiresAt:
-            "Custom Date"
+        case .customMinutes(let minutes):
+            "\(minutes) Minute\(minutes == 1 ? "" : "s")"
         }
+    }
+}
+
+private struct LegacyCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue: Int) {
+        return nil
     }
 }

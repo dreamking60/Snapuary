@@ -63,7 +63,7 @@ struct MockPhotoLibraryService: PhotoLibraryServing {
                 ],
                 kind: .systemScreenshot,
                 screenshotRule: ScreenshotRetentionRule(
-                    mode: .preset(.oneWeek),
+                    mode: .preset(.oneMonth),
                     anchor: .creationDate
                 ),
                 isProtectedFromCleanup: false
@@ -80,7 +80,7 @@ struct MockPhotoLibraryService: PhotoLibraryServing {
                 ],
                 kind: .systemScreenshot,
                 screenshotRule: ScreenshotRetentionRule(
-                    mode: .preset(.threeMonths),
+                    mode: .preset(.oneMonth),
                     anchor: .creationDate
                 ),
                 isProtectedFromCleanup: true
@@ -96,7 +96,7 @@ struct MockPhotoLibraryService: PhotoLibraryServing {
                 ],
                 kind: .importedScreenshotLike,
                 screenshotRule: ScreenshotRetentionRule(
-                    mode: .customDays(30),
+                    mode: .preset(.oneMonth),
                     anchor: .addedDate
                 ),
                 isProtectedFromCleanup: false
@@ -146,12 +146,13 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         options.includeHiddenAssets = false
 
+        let screenshotIdentifiers = Self.fetchSystemScreenshotIdentifiers()
         let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
         var assets: [MediaAsset] = []
         assets.reserveCapacity(fetchResult.count)
 
         fetchResult.enumerateObjects { asset, _, _ in
-            assets.append(Self.map(asset: asset))
+            assets.append(Self.map(asset: asset, screenshotIdentifiers: screenshotIdentifiers))
         }
 
         return assets
@@ -183,14 +184,39 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
         }
     }
 
-    static func map(asset: PHAsset) -> MediaAsset {
+    static func fetchSystemScreenshotIdentifiers() -> Set<String> {
+        let collections = PHAssetCollection.fetchAssetCollections(
+            with: .smartAlbum,
+            subtype: .smartAlbumScreenshots,
+            options: nil
+        )
+
+        guard let screenshotAlbum = collections.firstObject else {
+            return []
+        }
+
+        let assets = PHAsset.fetchAssets(in: screenshotAlbum, options: nil)
+        var identifiers = Set<String>()
+        identifiers.reserveCapacity(assets.count)
+
+        assets.enumerateObjects { asset, _, _ in
+            identifiers.insert(asset.localIdentifier)
+        }
+
+        return identifiers
+    }
+
+    static func map(asset: PHAsset, screenshotIdentifiers: Set<String> = []) -> MediaAsset {
+        let resources = PHAssetResource.assetResources(for: asset)
         let descriptor = PhotoLibraryAssetDescriptor(
             localIdentifier: asset.localIdentifier,
             mediaSubtypesRawValue: asset.mediaSubtypes.rawValue,
             creationDate: asset.creationDate,
             addedDate: asset.creationDate,
             pixelWidth: asset.pixelWidth,
-            pixelHeight: asset.pixelHeight
+            pixelHeight: asset.pixelHeight,
+            originalFilename: resources.first?.originalFilename,
+            isInSystemScreenshotAlbum: screenshotIdentifiers.contains(asset.localIdentifier)
         )
 
         return map(descriptor: descriptor)
@@ -211,7 +237,7 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
             tags: [],
             kind: kind,
             screenshotRule: descriptor.isSystemScreenshot
-                ? ScreenshotRetentionRule(mode: .preset(.thirtyDays), anchor: .creationDate)
+                ? ScreenshotRetentionRule(mode: .preset(.oneMonth), anchor: .creationDate)
                 : nil,
             isProtectedFromCleanup: false
         )
@@ -276,10 +302,12 @@ struct PhotoLibraryAssetDescriptor: Hashable {
     let addedDate: Date?
     let pixelWidth: Int
     let pixelHeight: Int
+    let originalFilename: String?
+    let isInSystemScreenshotAlbum: Bool
 
     var isSystemScreenshot: Bool {
         let screenshotRawValue = PHAssetMediaSubtype.photoScreenshot.rawValue
-        return (mediaSubtypesRawValue & screenshotRawValue) != 0
+        return isInSystemScreenshotAlbum || (mediaSubtypesRawValue & screenshotRawValue) != 0
     }
 
     func defaultTitle(for kind: MediaAssetKind) -> String {

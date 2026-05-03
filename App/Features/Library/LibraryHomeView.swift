@@ -1,8 +1,15 @@
+import Photos
 import SwiftUI
 
 struct LibraryHomeView: View {
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
+
+    private let gridColumns = [
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3)
+    ]
 
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
@@ -12,74 +19,34 @@ struct LibraryHomeView: View {
         @Bindable var viewModel = viewModel
 
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    if let message = viewModel.authorizationErrorMessage {
-                        SnapuaryCard(title: "Photo Access") {
-                            Text(message)
-                                .foregroundStyle(.secondary)
-
-                            if viewModel.authorizationStatus == .notDetermined {
-                                Button("Allow Photo Access") {
-                                    Task {
-                                        await viewModel.requestPhotoLibraryAccess()
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
+            Group {
+                if let message = viewModel.authorizationErrorMessage {
+                    LibraryAuthorizationView(
+                        message: message,
+                        authorizationStatus: viewModel.authorizationStatus,
+                        onRequestAccess: {
+                            await viewModel.requestPhotoLibraryAccess()
                         }
-                    }
-
-                    SnapshotOverviewCard(viewModel: viewModel)
-                    CleanupReminderCard(viewModel: viewModel)
-                    CleanupQueueCard(viewModel: viewModel)
-
-                    SnapuaryCard(title: "Tag Filters") {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                FilterChip(
-                                    title: "All",
-                                    isSelected: viewModel.selectedTag == nil
-                                ) {
-                                    viewModel.selectedTag = nil
-                                }
-
-                                ForEach(viewModel.availableTags) { tag in
-                                    FilterChip(
-                                        title: tag.name,
-                                        isSelected: viewModel.selectedTag?.normalizedName == tag.normalizedName
-                                    ) {
-                                        viewModel.toggleTag(tag)
-                                    }
-                                }
-                            }
-                        }
-
-                        if !viewModel.searchText.isEmpty || viewModel.selectedTag != nil {
-                            Button("Clear Filters") {
-                                viewModel.clearFilters()
-                            }
-                            .font(.footnote)
-                        }
-                    }
-
-                    AssetSectionCard(
-                        title: "Screenshots",
-                        emptyText: "No screenshots match the current search or tag filter.",
-                        assets: viewModel.screenshotAssets,
-                        onSelect: { selectedAsset = $0 }
                     )
-
-                    AssetSectionCard(
-                        title: "Other Photos",
-                        emptyText: "No non-screenshot photos match the current search or tag filter.",
-                        assets: viewModel.nonScreenshotAssets,
-                        onSelect: { selectedAsset = $0 }
-                    )
+                } else {
+                    ScrollView {
+                        VStack(spacing: 18) {
+                            LibraryHeader(viewModel: viewModel)
+                            LibraryFilterStrip(viewModel: viewModel)
+                            LibraryGrid(
+                                assets: viewModel.visibleAssets,
+                                columns: gridColumns,
+                                onSelect: { selectedAsset = $0 }
+                            )
+                        }
+                        .padding(.horizontal)
+                        .padding(.top, 12)
+                        .padding(.bottom, 24)
+                    }
                 }
-                .padding()
             }
             .navigationTitle("Library")
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $viewModel.searchText, prompt: "Search title or tag")
             .task {
                 if viewModel.authorizationStatus == .notDetermined {
@@ -87,6 +54,28 @@ struct LibraryHomeView: View {
                 } else {
                     await viewModel.load()
                 }
+            }
+            .alert(
+                viewModel.cleanupPromptTitle,
+                isPresented: Binding(
+                    get: { viewModel.shouldPromptForCleanup },
+                    set: { newValue in
+                        if !newValue {
+                            viewModel.dismissCleanupPrompt()
+                        }
+                    }
+                )
+            ) {
+                Button("Later", role: .cancel) {
+                    viewModel.dismissCleanupPrompt()
+                }
+                Button("Clean Now", role: .destructive) {
+                    Task {
+                        await viewModel.runCleanupNow()
+                    }
+                }
+            } message: {
+                Text(viewModel.cleanupPromptMessage)
             }
             .sheet(item: $selectedAsset) { asset in
                 AssetEditorSheet(
@@ -122,6 +111,222 @@ struct LibraryHomeView: View {
         }
 
         return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
+    }
+}
+
+struct CleanupHomeView: View {
+    @State private var viewModel: LibraryHomeViewModel
+    @State private var selectedAsset: MediaAsset?
+
+    init(viewModel: LibraryHomeViewModel) {
+        _viewModel = State(initialValue: viewModel)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    if let message = viewModel.authorizationErrorMessage {
+                        SnapuaryCard(title: "Photo Access") {
+                            Text(message)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    SnapshotOverviewCard(viewModel: viewModel)
+                    CleanupReminderCard(viewModel: viewModel)
+                    DefaultCleanupPoolCard(
+                        title: "Default Cleanup Area",
+                        subtitle: "Untagged screenshots automatically collect here until you classify or protect them.",
+                        assets: viewModel.untaggedScreenshotAssets,
+                        emptyText: "Every screenshot is either tagged, protected, or no screenshots have been found yet.",
+                        onSelect: { selectedAsset = $0 }
+                    )
+                    DefaultCleanupPoolCard(
+                        title: "Tagged Screenshots",
+                        subtitle: "Tagged screenshots stay visible here for review, but are not in the default catch-all bucket.",
+                        assets: viewModel.taggedScreenshotAssets,
+                        emptyText: "No tagged screenshots yet.",
+                        onSelect: { selectedAsset = $0 }
+                    )
+                    CleanupQueueCard(viewModel: viewModel, onSelect: { selectedAsset = $0 })
+                }
+                .padding()
+            }
+            .navigationTitle("Cleanup")
+            .task {
+                if viewModel.authorizationStatus == .notDetermined {
+                    await viewModel.requestPhotoLibraryAccess()
+                } else {
+                    await viewModel.load()
+                }
+            }
+            .alert(
+                viewModel.cleanupPromptTitle,
+                isPresented: Binding(
+                    get: { viewModel.shouldPromptForCleanup },
+                    set: { newValue in
+                        if !newValue {
+                            viewModel.dismissCleanupPrompt()
+                        }
+                    }
+                )
+            ) {
+                Button("Later", role: .cancel) {
+                    viewModel.dismissCleanupPrompt()
+                }
+                Button("Clean Now", role: .destructive) {
+                    Task {
+                        await viewModel.runCleanupNow()
+                    }
+                }
+            } message: {
+                Text(viewModel.cleanupPromptMessage)
+            }
+            .sheet(item: $selectedAsset) { asset in
+                AssetEditorSheet(
+                    asset: asset,
+                    tagLibrary: viewModel.tagLibrary,
+                    onRefresh: {
+                        await viewModel.load()
+                        selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
+                    },
+                    onToggleProtection: { await viewModel.toggleProtection(for: asset) },
+                    onToggleScreenshotLike: { await viewModel.toggleImportedScreenshotLike(for: asset) },
+                    onApplyRetentionRule: { rule in
+                        await viewModel.applyRetentionRule(rule, to: asset)
+                    },
+                    onAddTag: { name, colorHex in
+                        await viewModel.addTag(name: name, colorHex: colorHex, to: asset)
+                    },
+                    onAddTags: { entries in
+                        await viewModel.addTags(entries, to: asset)
+                    },
+                    onRemoveTag: { tag in
+                        await viewModel.removeTag(tag, from: asset)
+                    }
+                )
+                .presentationDetents([.large])
+            }
+        }
+    }
+
+    private func refreshedAsset(from asset: MediaAsset, in assets: [MediaAsset]) -> MediaAsset? {
+        guard let libraryIdentifier = asset.libraryIdentifier else {
+            return assets.first(where: { $0.id == asset.id })
+        }
+
+        return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
+    }
+}
+
+private struct LibraryAuthorizationView: View {
+    let message: String
+    let authorizationStatus: PhotoLibraryAuthorizationStatus
+    let onRequestAccess: () async -> Void
+
+    var body: some View {
+        ScrollView {
+            SnapuaryCard(title: "Photo Access") {
+                Text(message)
+                    .foregroundStyle(.secondary)
+
+                if authorizationStatus == .notDetermined {
+                    Button("Allow Photo Access") {
+                        Task {
+                            await onRequestAccess()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+private struct LibraryHeader: View {
+    let viewModel: LibraryHomeViewModel
+
+    var body: some View {
+        SnapuaryCard(title: "Browse") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Tap any photo to tag it, mark it as a screenshot, protect it, or set cleanup rules.")
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    PhotoCountBadge(title: "All", count: viewModel.filteredAssets.count)
+                    PhotoCountBadge(title: "Screenshots", count: viewModel.screenshotAssets.count)
+                    PhotoCountBadge(title: "Photos", count: viewModel.nonScreenshotAssets.count)
+                }
+            }
+        }
+    }
+}
+
+private struct LibraryFilterStrip: View {
+    @Bindable var viewModel: LibraryHomeViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("Collection", selection: $viewModel.selectedCollection) {
+                ForEach(LibraryCollection.allCases) { collection in
+                    Text(collection.title).tag(collection)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    FilterChip(
+                        title: "All Tags",
+                        isSelected: viewModel.selectedTag == nil
+                    ) {
+                        viewModel.selectedTag = nil
+                    }
+
+                    ForEach(viewModel.availableTags) { tag in
+                        FilterChip(
+                            title: tag.name,
+                            isSelected: viewModel.selectedTag?.normalizedName == tag.normalizedName
+                        ) {
+                            viewModel.toggleTag(tag)
+                        }
+                    }
+                }
+            }
+
+            if !viewModel.searchText.isEmpty || viewModel.selectedTag != nil {
+                Button("Clear Filters") {
+                    viewModel.clearFilters()
+                }
+                .font(.footnote)
+            }
+        }
+    }
+}
+
+private struct LibraryGrid: View {
+    let assets: [MediaAsset]
+    let columns: [GridItem]
+    let onSelect: (MediaAsset) -> Void
+
+    var body: some View {
+        if assets.isEmpty {
+            SnapuaryCard(title: "No Results") {
+                Text("No photos match the current collection, search, or tag filter.")
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            LazyVGrid(columns: columns, spacing: 3) {
+                ForEach(assets) { asset in
+                    AssetGridTile(asset: asset) {
+                        onSelect(asset)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
     }
 }
 
@@ -194,6 +399,7 @@ private struct CleanupReminderCard: View {
 
 private struct CleanupQueueCard: View {
     let viewModel: LibraryHomeViewModel
+    let onSelect: (MediaAsset) -> Void
 
     var body: some View {
         SnapuaryCard(title: "Cleanup Queue") {
@@ -207,22 +413,27 @@ private struct CleanupQueueCard: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(viewModel.cleanupCandidates) { asset in
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(asset.title)
-                                .font(.subheadline.weight(.medium))
-                            if let expirationDate = asset.expirationDate {
-                                Text("Expired \(expirationDate.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
+                    Button {
+                        onSelect(asset)
+                    } label: {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(asset.title)
+                                    .font(.subheadline.weight(.medium))
+                                if let expirationDate = asset.expirationDate {
+                                    Text("Expired \(expirationDate.formatted(date: .abbreviated, time: .omitted))")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
+                            Spacer()
+                            Text(asset.kind.displayName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        Spacer()
-                        Text(asset.kind.displayName)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 4)
+                    .buttonStyle(.plain)
                 }
 
                 Button(viewModel.isRunningCleanup ? "Cleaning..." : "Run Cleanup Now") {
@@ -237,14 +448,19 @@ private struct CleanupQueueCard: View {
     }
 }
 
-private struct AssetSectionCard: View {
+private struct DefaultCleanupPoolCard: View {
     let title: String
-    let emptyText: String
+    let subtitle: String
     let assets: [MediaAsset]
+    let emptyText: String
     let onSelect: (MediaAsset) -> Void
 
     var body: some View {
         SnapuaryCard(title: title) {
+            Text(subtitle)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
             if assets.isEmpty {
                 Text(emptyText)
                     .foregroundStyle(.secondary)
@@ -266,13 +482,8 @@ private struct AssetRow: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 12) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(asset.isScreenshot ? Color.accentColor.opacity(0.18) : Color(.tertiarySystemBackground))
+                PhotoThumbnailView(asset: asset, cornerRadius: 12)
                     .frame(width: 52, height: 52)
-                    .overlay {
-                        Image(systemName: asset.isScreenshot ? "camera.viewfinder" : "photo")
-                            .foregroundStyle(asset.isScreenshot ? Color.accentColor : Color.secondary)
-                    }
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -315,6 +526,139 @@ private struct AssetRow: View {
             .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct AssetGridTile: View {
+    let asset: MediaAsset
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .bottomLeading) {
+                RoundedRectangle(cornerRadius: 0, style: .continuous)
+                    .fill(tileBackground)
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        PhotoThumbnailView(asset: asset, cornerRadius: 0, contentMode: .fill)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        HStack(spacing: 6) {
+                            if asset.isScreenshot {
+                                TileBadge(systemImage: "camera.viewfinder")
+                            }
+                            if asset.isProtectedFromCleanup {
+                                TileBadge(systemImage: "bookmark.fill")
+                            }
+                        }
+                        .padding(8)
+                    }
+
+                LinearGradient(
+                    colors: [Color.clear, Color.black.opacity(0.58)],
+                    startPoint: .center,
+                    endPoint: .bottom
+                )
+                .aspectRatio(1, contentMode: .fit)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(asset.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.white)
+                        .lineLimit(2)
+
+                    if !asset.tags.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(asset.tags.prefix(2)) { tag in
+                                    CompactTagPill(tag: tag)
+                                }
+                                if asset.tags.count > 2 {
+                                    Text("+\(asset.tags.count - 2)")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(Color.white.opacity(0.9))
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var tileBackground: LinearGradient {
+        if asset.isScreenshot {
+            return LinearGradient(
+                colors: [Color.accentColor.opacity(0.22), Color.accentColor.opacity(0.08)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        }
+
+        return LinearGradient(
+            colors: [Color(.secondarySystemBackground), Color(.tertiarySystemBackground)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+}
+
+private struct PhotoThumbnailView: View {
+    let asset: MediaAsset
+    let cornerRadius: CGFloat
+    var contentMode: ContentMode = .fill
+
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(asset.isScreenshot ? Color.accentColor.opacity(0.18) : Color(.tertiarySystemBackground))
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: contentMode)
+            } else {
+                Image(systemName: asset.isScreenshot ? "camera.viewfinder" : "photo")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(asset.isScreenshot ? Color.accentColor : Color.secondary)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .task(id: asset.libraryIdentifier) {
+            await loadThumbnailIfNeeded()
+        }
+    }
+
+    @MainActor
+    private func loadThumbnailIfNeeded() async {
+        guard image == nil,
+              let libraryIdentifier = asset.libraryIdentifier else {
+            return
+        }
+
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [libraryIdentifier], options: nil)
+        guard let photoAsset = result.firstObject else {
+            return
+        }
+
+        let targetSize = CGSize(width: 300, height: 300)
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+
+        PHCachingImageManager.default().requestImage(
+            for: photoAsset,
+            targetSize: targetSize,
+            contentMode: contentMode == .fill ? .aspectFill : .aspectFit,
+            options: options
+        ) { renderedImage, _ in
+            image = renderedImage
+        }
     }
 }
 
@@ -438,9 +782,8 @@ private struct AssetRuleEditorView: View {
     let onRefresh: () async -> Void
     let onApplyRetentionRule: (ScreenshotRetentionRule) async -> Void
 
-    @State private var customDayCount = "30"
+    @State private var customMinuteCount = "1"
     @State private var selectedAnchor: ScreenshotRetentionRule.Anchor = .creationDate
-    @State private var fixedExpirationDate = Date.now.addingTimeInterval(86_400 * 30)
 
     var body: some View {
         Form {
@@ -476,65 +819,38 @@ private struct AssetRuleEditorView: View {
                         }
                     }
                 }
-
-                Button("Manual Only") {
-                    Task {
-                        await onApplyRetentionRule(
-                            ScreenshotRetentionRule(mode: .manualOnly, anchor: selectedAnchor)
-                        )
-                        await onRefresh()
-                    }
-                }
             }
 
-            Section("Custom Duration") {
+            Section("Custom Minutes") {
                 HStack {
-                    TextField("Days", text: $customDayCount)
+                    TextField("Minutes", text: $customMinuteCount)
                         .keyboardType(.numberPad)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
                     Button("Apply") {
-                        guard let days = Int(customDayCount), days > 0 else {
+                        guard let minutes = Int(customMinuteCount), minutes >= 1 else {
                             return
                         }
 
                         Task {
                             await onApplyRetentionRule(
-                                ScreenshotRetentionRule(mode: .customDays(days), anchor: selectedAnchor)
+                                ScreenshotRetentionRule(mode: .customMinutes(minutes), anchor: selectedAnchor)
                             )
                             await onRefresh()
                         }
                     }
                 }
-            }
-
-            Section("Fixed Date") {
-                DatePicker(
-                    "Expires On",
-                    selection: $fixedExpirationDate,
-                    in: Date.now...,
-                    displayedComponents: .date
-                )
-
-                Button("Apply Fixed Date") {
-                    Task {
-                        await onApplyRetentionRule(
-                            ScreenshotRetentionRule(mode: .expiresAt(fixedExpirationDate), anchor: selectedAnchor)
-                        )
-                        await onRefresh()
-                    }
-                }
+                Text("Minimum is 1 minute so you can verify auto-cleanup quickly during testing.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
         .navigationTitle("Rule Editor")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             selectedAnchor = asset.screenshotRule?.anchor ?? .creationDate
-            if case let .customDays(days)? = asset.screenshotRule?.mode {
-                customDayCount = String(days)
-            }
-            if case let .expiresAt(date)? = asset.screenshotRule?.mode {
-                fixedExpirationDate = date
-            } else if let expirationDate = asset.expirationDate {
-                fixedExpirationDate = expirationDate
+            if case let .customMinutes(minutes)? = asset.screenshotRule?.mode {
+                customMinuteCount = String(minutes)
             }
         }
     }
@@ -611,6 +927,8 @@ private struct AssetTagManagerView: View {
 
             Section("Create Tag") {
                 TextField("New tag", text: $draftTagName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -710,6 +1028,25 @@ private struct StatTile: View {
     }
 }
 
+private struct PhotoCountBadge: View {
+    let title: String
+    let count: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(count)")
+                .font(.headline.weight(.semibold))
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.tertiarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
 private struct FilterChip: View {
     let title: String
     let isSelected: Bool
@@ -729,6 +1066,19 @@ private struct FilterChip: View {
     }
 }
 
+private struct TileBadge: View {
+    let systemImage: String
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .padding(6)
+            .background(Color.black.opacity(0.32))
+            .clipShape(Circle())
+    }
+}
+
 private struct TagPill: View {
     let tag: MediaTag
 
@@ -743,6 +1093,26 @@ private struct TagPill: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(Color(.tertiarySystemBackground))
+        .clipShape(Capsule())
+    }
+}
+
+private struct CompactTagPill: View {
+    let tag: MediaTag
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(Color(hex: tag.colorHex) ?? .accentColor)
+                .frame(width: 6, height: 6)
+            Text(tag.name)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.25))
         .clipShape(Capsule())
     }
 }
