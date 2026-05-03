@@ -19,7 +19,9 @@ final class RootTabViewModel {
     func makeLibraryViewModel() -> LibraryHomeViewModel {
         LibraryHomeViewModel(
             photoLibraryService: container.photoLibraryService,
-            expirationService: container.expirationService
+            metadataService: container.metadataService,
+            expirationService: container.expirationService,
+            cleanupSchedulingService: container.cleanupSchedulingService
         )
     }
 

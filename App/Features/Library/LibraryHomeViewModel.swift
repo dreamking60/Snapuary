@@ -1,34 +1,378 @@
 import Foundation
 import Observation
 
+struct TagLibraryEntry: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let normalizedName: String
+    let colorHex: String
+    let usageCount: Int
+}
+
 @Observable
 final class LibraryHomeViewModel {
     private let photoLibraryService: PhotoLibraryServing
+    private let metadataService: MediaAssetMetadataServing
     private let expirationService: ScreenshotExpirationServing
+    private let cleanupSchedulingService: CleanupSchedulingServing
 
     private(set) var assets: [MediaAsset] = []
-    private(set) var cleanupSummary = CleanupSummary(expiringSoonCount: 0, protectedCount: 0)
+    private(set) var cleanupSummary = CleanupSummary(
+        totalScreenshotCount: 0,
+        autoManagedCount: 0,
+        expiringSoonCount: 0,
+        protectedCount: 0,
+        readyToCleanCount: 0
+    )
+    private(set) var cleanupCandidates: [MediaAsset] = []
+    private(set) var lastCleanupResult: CleanupExecutionResult?
+    private(set) var cleanupReminderStatus: CleanupNotificationAuthorizationStatus = .notDetermined
+    private(set) var nextCleanupReminder: CleanupReminderSchedule?
+    private(set) var authorizationStatus: PhotoLibraryAuthorizationStatus
+    private(set) var authorizationErrorMessage: String?
     private(set) var isLoading = false
+    private(set) var isRunningCleanup = false
+    private(set) var isSchedulingReminder = false
+    var searchText = ""
+    var selectedTag: MediaTag?
 
     init(
         photoLibraryService: PhotoLibraryServing,
-        expirationService: ScreenshotExpirationServing
+        metadataService: MediaAssetMetadataServing,
+        expirationService: ScreenshotExpirationServing,
+        cleanupSchedulingService: CleanupSchedulingServing
     ) {
         self.photoLibraryService = photoLibraryService
+        self.metadataService = metadataService
         self.expirationService = expirationService
+        self.cleanupSchedulingService = cleanupSchedulingService
+        self.authorizationStatus = photoLibraryService.authorizationStatus()
     }
 
     func load() async {
+        authorizationStatus = photoLibraryService.authorizationStatus()
+        cleanupReminderStatus = await cleanupSchedulingService.authorizationStatus()
+        guard authorizationStatus.canReadAssets else {
+            assets = []
+            authorizationErrorMessage = authorizationMessage(for: authorizationStatus)
+            cleanupSummary = CleanupSummary(
+                totalScreenshotCount: 0,
+                autoManagedCount: 0,
+                expiringSoonCount: 0,
+                protectedCount: 0,
+                readyToCleanCount: 0
+            )
+            cleanupCandidates = []
+            nextCleanupReminder = nil
+            return
+        }
+
         isLoading = true
         defer { isLoading = false }
 
         do {
             let assets = try await photoLibraryService.fetchAssets()
             self.assets = assets
+            authorizationErrorMessage = nil
             cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
+            cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
+            nextCleanupReminder = nil
         } catch {
             assets = []
-            cleanupSummary = CleanupSummary(expiringSoonCount: 0, protectedCount: 0)
+            authorizationErrorMessage = "Failed to load photos from the library."
+            cleanupSummary = CleanupSummary(
+                totalScreenshotCount: 0,
+                autoManagedCount: 0,
+                expiringSoonCount: 0,
+                protectedCount: 0,
+                readyToCleanCount: 0
+            )
+            cleanupCandidates = []
+            nextCleanupReminder = nil
         }
+    }
+
+    func requestPhotoLibraryAccess() async {
+        authorizationStatus = await photoLibraryService.requestAuthorization()
+        if authorizationStatus.canReadAssets {
+            await load()
+        } else {
+            authorizationErrorMessage = authorizationMessage(for: authorizationStatus)
+        }
+    }
+
+    var availableTags: [MediaTag] {
+        let tags = assets.flatMap(\.tags)
+        var seen = Set<String>()
+        return tags
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            .filter { seen.insert($0.normalizedName).inserted }
+    }
+
+    var tagLibrary: [TagLibraryEntry] {
+        var summary: [String: (name: String, colorHex: String, usageCount: Int)] = [:]
+
+        for tag in assets.flatMap(\.tags) {
+            let key = tag.normalizedName
+            if let current = summary[key] {
+                summary[key] = (current.name, current.colorHex, current.usageCount + 1)
+            } else {
+                summary[key] = (tag.name, tag.colorHex, 1)
+            }
+        }
+
+        return summary
+            .map { key, value in
+                TagLibraryEntry(
+                    id: key,
+                    name: value.name,
+                    normalizedName: key,
+                    colorHex: value.colorHex,
+                    usageCount: value.usageCount
+                )
+            }
+            .sorted {
+                if $0.usageCount == $1.usageCount {
+                    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+                return $0.usageCount > $1.usageCount
+            }
+    }
+
+    var filteredAssets: [MediaAsset] {
+        assets
+            .filter { matchesSelectedTag(asset: $0) }
+            .filter { matchesSearchText(asset: $0) }
+    }
+
+    var screenshotAssets: [MediaAsset] {
+        filteredAssets.filter(\.isScreenshot)
+    }
+
+    var nonScreenshotAssets: [MediaAsset] {
+        filteredAssets.filter { !$0.isScreenshot }
+    }
+
+    func toggleTag(_ tag: MediaTag) {
+        if selectedTag?.normalizedName == tag.normalizedName {
+            selectedTag = nil
+        } else {
+            selectedTag = tag
+        }
+    }
+
+    func clearFilters() {
+        searchText = ""
+        selectedTag = nil
+    }
+
+    func toggleProtection(for asset: MediaAsset) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        assets[index].isProtectedFromCleanup.toggle()
+        await persistMetadata(for: assets[index])
+        recalculateCleanupState()
+    }
+
+    func toggleImportedScreenshotLike(for asset: MediaAsset) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        if assets[index].kind == .photo {
+            assets[index].kind = .importedScreenshotLike
+            assets[index].screenshotRule = ScreenshotRetentionRule(
+                mode: .preset(.thirtyDays),
+                anchor: .addedDate
+            )
+        } else if assets[index].kind == .importedScreenshotLike {
+            assets[index].kind = .photo
+            assets[index].screenshotRule = nil
+            assets[index].isProtectedFromCleanup = false
+        }
+
+        await persistMetadata(for: assets[index])
+        recalculateCleanupState()
+    }
+
+    func applyRetentionRule(_ rule: ScreenshotRetentionRule, to asset: MediaAsset) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        assets[index].screenshotRule = rule
+        await persistMetadata(for: assets[index])
+        recalculateCleanupState()
+    }
+
+    func addTag(name: String, colorHex: String, to asset: MediaAsset) async {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty,
+              let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        let normalizedName = trimmedName.lowercased()
+        if assets[index].tags.contains(where: { $0.normalizedName == normalizedName }) {
+            return
+        }
+
+        assets[index].tags.append(
+            MediaTag(id: UUID(), name: trimmedName, colorHex: colorHex)
+        )
+        await persistMetadata(for: assets[index])
+    }
+
+    func addTags(_ tags: [TagLibraryEntry], to asset: MediaAsset) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        let existingNames = Set(assets[index].tags.map(\.normalizedName))
+        let newTags = tags
+            .filter { !existingNames.contains($0.normalizedName) }
+            .map { entry in
+                MediaTag(id: UUID(), name: entry.name, colorHex: entry.colorHex)
+            }
+
+        guard !newTags.isEmpty else {
+            return
+        }
+
+        assets[index].tags.append(contentsOf: newTags)
+        await persistMetadata(for: assets[index])
+    }
+
+    func removeTag(_ tag: MediaTag, from asset: MediaAsset) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        assets[index].tags.removeAll { $0.normalizedName == tag.normalizedName }
+        if selectedTag?.normalizedName == tag.normalizedName {
+            selectedTag = nil
+        }
+        await persistMetadata(for: assets[index])
+    }
+
+    func runCleanupNow() async {
+        guard !isRunningCleanup else {
+            return
+        }
+
+        let candidates = expirationService.cleanupCandidates(from: assets, now: .now)
+        guard !candidates.isEmpty else {
+            lastCleanupResult = CleanupExecutionResult(deletedCount: 0, deletedAssetTitles: [])
+            return
+        }
+
+        let identifiers = candidates.compactMap(\.libraryIdentifier)
+        guard !identifiers.isEmpty else {
+            return
+        }
+
+        isRunningCleanup = true
+        defer { isRunningCleanup = false }
+
+        do {
+            try await photoLibraryService.deleteAssets(withLocalIdentifiers: identifiers)
+            try await metadataService.removeMetadata(for: identifiers)
+            lastCleanupResult = CleanupExecutionResult(
+                deletedCount: candidates.count,
+                deletedAssetTitles: candidates.map(\.title)
+            )
+            await load()
+            if cleanupReminderStatus.canSchedule {
+                await scheduleNextCleanupReminder()
+            }
+        } catch {
+            authorizationErrorMessage = "Cleanup failed while deleting expired screenshots."
+        }
+    }
+
+    func requestCleanupReminderPermission() async {
+        cleanupReminderStatus = await cleanupSchedulingService.requestAuthorization()
+        if cleanupReminderStatus.canSchedule {
+            await scheduleNextCleanupReminder()
+        }
+    }
+
+    func scheduleNextCleanupReminder() async {
+        guard !isSchedulingReminder else {
+            return
+        }
+
+        isSchedulingReminder = true
+        defer { isSchedulingReminder = false }
+
+        do {
+            nextCleanupReminder = try await cleanupSchedulingService.scheduleNextCleanupReminder(
+                for: assets,
+                now: .now
+            )
+        } catch {
+            authorizationErrorMessage = "Failed to schedule the next cleanup reminder."
+        }
+    }
+
+    private func authorizationMessage(for status: PhotoLibraryAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined:
+            "Snapuary needs access to the photo library to classify screenshots and manage cleanup rules."
+        case .denied:
+            "Photo access is denied. Enable Photos access in Settings to scan screenshots."
+        case .restricted:
+            "Photo access is restricted on this device."
+        case .limited:
+            "Limited photo access is active. Snapuary can only scan the photos you selected."
+        case .authorized:
+            ""
+        }
+    }
+
+    private func matchesSelectedTag(asset: MediaAsset) -> Bool {
+        guard let selectedTag else {
+            return true
+        }
+
+        return asset.tags.contains { $0.normalizedName == selectedTag.normalizedName }
+    }
+
+    private func matchesSearchText(asset: MediaAsset) -> Bool {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return true
+        }
+
+        return asset.title.localizedCaseInsensitiveContains(query)
+            || asset.tags.contains { $0.name.localizedCaseInsensitiveContains(query) }
+            || asset.kind.displayName.localizedCaseInsensitiveContains(query)
+    }
+
+    private func persistMetadata(for asset: MediaAsset) async {
+        guard let libraryIdentifier = asset.libraryIdentifier else {
+            return
+        }
+
+        let record = MediaAssetMetadataRecord(
+            isImportedScreenshotLike: asset.kind == .importedScreenshotLike,
+            tags: asset.tags,
+            screenshotRule: asset.kind == .photo ? nil : asset.screenshotRule,
+            isProtectedFromCleanup: asset.isProtectedFromCleanup
+        )
+
+        do {
+            try await metadataService.saveMetadata(record, for: libraryIdentifier)
+            recalculateCleanupState()
+        } catch {
+            authorizationErrorMessage = "Failed to save local asset metadata."
+        }
+    }
+
+    private func recalculateCleanupState() {
+        cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
+        cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
     }
 }

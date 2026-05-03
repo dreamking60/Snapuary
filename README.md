@@ -5,10 +5,11 @@ Snapuary is an iOS app focused on screenshot lifecycle control and privacy prote
 ## Product direction
 
 ### 1. Screenshot library governance
-- Set expiration rules for screenshots.
+- Classify images into screenshots and non-screenshots, with `PhotoKit` system screenshot detection as the primary rule.
+- Set flexible expiration rules for screenshots.
 - Auto-clean screenshots that are no longer needed.
-- Mark screenshots with protected tags such as favorites.
-- Organize screenshots and other images with custom tags and smart groupings.
+- Keep selected screenshots in a protected collection so they never auto-clean.
+- Organize screenshots and other images with custom tags, search, and smart groupings.
 
 ### 2. Watermark privacy inspection
 - Analyze screenshots for visible watermarks.
@@ -45,6 +46,14 @@ brew install xcodegen
 
 4. Open `Snapuary.xcodeproj` in Xcode.
 
+## Current library implementation
+
+- Reads photo assets through `PhotoKit`
+- Classifies system screenshots using `PHAsset.mediaSubtypes.contains(.photoScreenshot)`
+- Treats all other images as non-screenshot photos by default
+- Persists local overrides for protected screenshots, tags, manual screenshot-like classification, and retention rules
+- Schedules the next cleanup reminder through local notifications
+
 ## Current structure
 
 ```text
@@ -61,9 +70,8 @@ project.yml
 
 ## Near-term implementation plan
 
-1. Add Photos framework integration and a local persistence layer.
-2. Implement screenshot detection, expiration rules, and cleanup workflow.
-3. Add tag management and protected collections.
+1. Add `PhotoKit` integration and a local persistence layer.
+2. Implement screenshot detection with `photoScreenshot` and manual screenshot-like exceptions.
+3. Implement screenshot retention presets, custom durations, and protected collections.
 4. Build watermark detection pipeline with Vision/OCR-based heuristics.
 5. Add unit tests and snapshot/UI tests.
-
