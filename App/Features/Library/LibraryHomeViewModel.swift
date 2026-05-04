@@ -37,6 +37,7 @@ final class LibraryHomeViewModel {
 
     private let photoLibraryService: PhotoLibraryServing
     let thumbnailStore: PhotoLibraryThumbnailStore
+    private let assetIndexCache: MediaAssetIndexCaching
     private let metadataService: MediaAssetMetadataServing
     private let expirationService: ScreenshotExpirationServing
     private let cleanupSchedulingService: CleanupSchedulingServing
@@ -44,6 +45,7 @@ final class LibraryHomeViewModel {
     private let fullLoadPageSize = 240
 
     private(set) var assets: [MediaAsset] = []
+    private var cleanupScopedAssets: [MediaAsset] = []
     private(set) var cleanupSummary = CleanupSummary(
         totalScreenshotCount: 0,
         autoManagedCount: 0,
@@ -59,6 +61,8 @@ final class LibraryHomeViewModel {
     private(set) var authorizationErrorMessage: String?
     private(set) var isLoading = false
     private(set) var isLoadingMore = false
+    private(set) var isSyncingCleanupData = false
+    private(set) var pendingUndoDelete: MediaAsset?
     private(set) var loadedAssetCount = 0
     private(set) var totalAssetCount = 0
     private(set) var isRunningCleanup = false
@@ -69,17 +73,25 @@ final class LibraryHomeViewModel {
     var selectedCollection: LibraryCollection = .all
     private var hasPromptedForCleanupThisSession = false
     private var hasLoadedCompleteLibrary = false
+    private var hasHydratedCache = false
+    private var hasSynchronizedBrowsingThisLaunch = false
+    private var hasSynchronizedCompleteThisLaunch = false
+    private var cachedFingerprint: PhotoLibraryFingerprint?
     private var currentOffset = 0
+    private var cleanupSyncTask: Task<Void, Never>?
+    private var pendingDeleteTask: Task<Void, Never>?
 
     init(
         photoLibraryService: PhotoLibraryServing,
         thumbnailStore: PhotoLibraryThumbnailStore = .empty,
+        assetIndexCache: MediaAssetIndexCaching,
         metadataService: MediaAssetMetadataServing,
         expirationService: ScreenshotExpirationServing,
         cleanupSchedulingService: CleanupSchedulingServing
     ) {
         self.photoLibraryService = photoLibraryService
         self.thumbnailStore = thumbnailStore
+        self.assetIndexCache = assetIndexCache
         self.metadataService = metadataService
         self.expirationService = expirationService
         self.cleanupSchedulingService = cleanupSchedulingService
@@ -99,11 +111,22 @@ final class LibraryHomeViewModel {
     }
 
     func loadForBrowsing() async {
+        await hydrateCacheIfNeeded()
+        guard !hasSynchronizedBrowsingThisLaunch else {
+            return
+        }
         await load(scope: .browsing)
+        hasSynchronizedBrowsingThisLaunch = true
     }
 
     func load() async {
+        await hydrateCacheIfNeeded()
+        guard !hasSynchronizedCompleteThisLaunch else {
+            return
+        }
         await load(scope: .complete)
+        hasSynchronizedBrowsingThisLaunch = true
+        hasSynchronizedCompleteThisLaunch = true
     }
 
     func loadMoreIfNeeded(visibleIndex _: Int) async {
@@ -117,20 +140,39 @@ final class LibraryHomeViewModel {
     }
 
     func ensureFullLibraryLoaded() async {
+        await hydrateCacheIfNeeded()
+        if hasLoadedCompleteLibrary && hasSynchronizedCompleteThisLaunch {
+            return
+        }
+
         if assets.isEmpty || totalAssetCount == 0 {
             await load()
             return
         }
 
-        guard !hasLoadedCompleteLibrary else {
+        if !hasSynchronizedCompleteThisLaunch {
+            await load()
+        }
+    }
+
+    func prepareCleanupData() async {
+        await hydrateCacheIfNeeded()
+        authorizationStatus = photoLibraryService.authorizationStatus()
+        cleanupReminderStatus = await cleanupSchedulingService.authorizationStatus()
+
+        guard authorizationStatus.canReadAssets else {
+            authorizationErrorMessage = authorizationMessage(for: authorizationStatus)
             return
         }
 
-        while hasMoreAssetsToLoad {
-            await loadNextPage(pageSize: fullLoadPageSize)
+        if assets.isEmpty && !isLoading {
+            startCleanupSyncIfNeeded()
+            return
         }
 
-        hasLoadedCompleteLibrary = true
+        if !hasLoadedCompleteLibrary || !hasSynchronizedCompleteThisLaunch {
+            startCleanupSyncIfNeeded()
+        }
     }
 
     func requestPhotoLibraryAccessForBrowsing() async {
@@ -222,6 +264,10 @@ final class LibraryHomeViewModel {
         screenshotAssets.filter { !$0.tags.isEmpty }
     }
 
+    var screenshotReviewQueue: [MediaAsset] {
+        cleanupScopedAssets.filter { !$0.isProtectedFromCleanup }
+    }
+
     func assets(for tagEntry: TagLibraryEntry) -> [MediaAsset] {
         assets.filter { asset in
             asset.tags.contains { $0.normalizedName == tagEntry.normalizedName }
@@ -247,6 +293,20 @@ final class LibraryHomeViewModel {
         }
 
         assets[index].isProtectedFromCleanup.toggle()
+        await persistMetadata(for: assets[index])
+        recalculateCleanupState()
+    }
+
+    func protectFromCleanup(_ asset: MediaAsset) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        guard !assets[index].isProtectedFromCleanup else {
+            return
+        }
+
+        assets[index].isProtectedFromCleanup = true
         await persistMetadata(for: assets[index])
         recalculateCleanupState()
     }
@@ -486,13 +546,86 @@ final class LibraryHomeViewModel {
                 deletedCount: candidates.count,
                 deletedAssetTitles: candidates.map(\.title)
             )
-            await load()
+            await reloadAfterLibraryMutation(scope: .complete)
             if cleanupReminderStatus.canSchedule {
                 await scheduleNextCleanupReminder()
             }
         } catch {
             authorizationErrorMessage = "Cleanup failed while deleting expired screenshots."
         }
+    }
+
+    func deleteAssetImmediately(_ asset: MediaAsset) async -> Bool {
+        guard let libraryIdentifier = asset.libraryIdentifier else {
+            return false
+        }
+
+        do {
+            try await photoLibraryService.deleteAssets(withLocalIdentifiers: [libraryIdentifier])
+            try await metadataService.removeMetadata(for: [libraryIdentifier])
+
+            pendingDeleteTask?.cancel()
+            pendingDeleteTask = nil
+            pendingUndoDelete = nil
+
+            if assets.contains(where: { $0.id == asset.id }) {
+                removeAssetFromLocalState(asset)
+            } else {
+                refreshCleanupStateFromScopedAssets()
+            }
+
+            lastCleanupResult = CleanupExecutionResult(
+                deletedCount: 1,
+                deletedAssetTitles: [asset.title]
+            )
+            await persistSnapshot()
+            return true
+        } catch {
+            authorizationErrorMessage = "Failed to delete the selected screenshot."
+            return false
+        }
+    }
+
+    func stageDeleteForUndo(_ asset: MediaAsset) {
+        pendingDeleteTask?.cancel()
+        pendingUndoDelete = asset
+        removeAssetFromLocalState(asset)
+
+        pendingDeleteTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(4))
+            } catch {
+                return
+            }
+
+            guard let self else {
+                return
+            }
+
+            let stagedAsset = self.pendingUndoDelete
+            guard stagedAsset?.id == asset.id else {
+                return
+            }
+
+            let deleted = await self.deleteAssetImmediately(asset)
+            if deleted {
+                await MainActor.run {
+                    self.pendingUndoDelete = nil
+                    self.pendingDeleteTask = nil
+                }
+            }
+        }
+    }
+
+    func undoPendingDelete() {
+        guard let pendingUndoDelete else {
+            return
+        }
+
+        pendingDeleteTask?.cancel()
+        pendingDeleteTask = nil
+        insertAssetBackIntoLocalState(pendingUndoDelete)
+        self.pendingUndoDelete = nil
     }
 
     func dismissCleanupPrompt() {
@@ -559,11 +692,35 @@ final class LibraryHomeViewModel {
         }
 
         isLoading = true
-        resetLibraryState()
         defer { isLoading = false }
 
         do {
-            totalAssetCount = try await photoLibraryService.refreshAssetIndex()
+            let fingerprint = try await photoLibraryService.libraryFingerprint()
+            totalAssetCount = fingerprint.totalCount
+
+            if let cachedFingerprint,
+               cachedFingerprint == fingerprint,
+               !assets.isEmpty {
+                currentOffset = assets.count
+                loadedAssetCount = assets.count
+                hasLoadedCompleteLibrary = currentOffset >= totalAssetCount
+
+                if scope == .complete && !hasLoadedCompleteLibrary {
+                    while hasMoreAssetsToLoad {
+                        await loadNextPage(pageSize: fullLoadPageSize)
+                    }
+                    hasLoadedCompleteLibrary = true
+                }
+
+                authorizationErrorMessage = nil
+                nextCleanupReminder = nil
+                await persistSnapshot()
+                return
+            }
+
+            resetLibraryState()
+            cachedFingerprint = fingerprint
+            totalAssetCount = fingerprint.totalCount
             let initialPageSize = scope == .browsing ? browsingPageSize : fullLoadPageSize
             await loadNextPage(pageSize: initialPageSize)
 
@@ -576,6 +733,7 @@ final class LibraryHomeViewModel {
 
             authorizationErrorMessage = nil
             nextCleanupReminder = nil
+            await persistSnapshot()
         } catch {
             resetLibraryState()
             authorizationErrorMessage = "Failed to load photos from the library."
@@ -609,12 +767,12 @@ final class LibraryHomeViewModel {
 
             for startIndex in stride(from: 0, to: page.count, by: chunkSize) {
                 let endIndex = min(startIndex + chunkSize, page.count)
-                assets.append(contentsOf: page[startIndex..<endIndex])
+                let chunkAssets = Array(page[startIndex..<endIndex])
+                assets.append(contentsOf: chunkAssets)
+                cleanupScopedAssets.append(contentsOf: chunkAssets.filter(\.isScreenshot))
                 nextOffset += endIndex - startIndex
                 loadedAssetCount = assets.count
-                cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
-                cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
-                updateCleanupPromptState()
+                refreshCleanupStateFromScopedAssets()
 
                 if endIndex < page.count {
                     await Task.yield()
@@ -623,8 +781,34 @@ final class LibraryHomeViewModel {
 
             currentOffset = nextOffset
             hasLoadedCompleteLibrary = currentOffset >= totalAssetCount
+            await persistSnapshot()
         } catch {
             authorizationErrorMessage = "Failed to load more photos from the library."
+        }
+    }
+
+    private func hydrateCacheIfNeeded() async {
+        guard !hasHydratedCache else {
+            return
+        }
+
+        hasHydratedCache = true
+
+        do {
+            guard let snapshot = try await assetIndexCache.loadSnapshot() else {
+                return
+            }
+
+            cachedFingerprint = snapshot.fingerprint
+            assets = snapshot.assets
+            cleanupScopedAssets = snapshot.assets.filter(\.isScreenshot)
+            totalAssetCount = max(snapshot.fingerprint.totalCount, snapshot.assets.count)
+            loadedAssetCount = snapshot.assets.count
+            currentOffset = snapshot.assets.count
+            hasLoadedCompleteLibrary = snapshot.isComplete && snapshot.assets.count >= snapshot.fingerprint.totalCount
+            refreshCleanupStateFromScopedAssets()
+        } catch {
+            cachedFingerprint = nil
         }
     }
 
@@ -662,6 +846,7 @@ final class LibraryHomeViewModel {
         do {
             try await metadataService.saveMetadata(record, for: libraryIdentifier)
             recalculateCleanupState()
+            await persistSnapshot()
         } catch {
             authorizationErrorMessage = "Failed to save local asset metadata."
         }
@@ -669,9 +854,8 @@ final class LibraryHomeViewModel {
 
     private func recalculateCleanupState() {
         loadedAssetCount = assets.count
-        cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
-        cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
-        updateCleanupPromptState()
+        cleanupScopedAssets = assets.filter(\.isScreenshot)
+        refreshCleanupStateFromScopedAssets()
     }
 
     private func updateCleanupPromptState() {
@@ -683,12 +867,100 @@ final class LibraryHomeViewModel {
         shouldPromptForCleanup = !cleanupCandidates.isEmpty
     }
 
+    private func persistSnapshot() async {
+        guard let cachedFingerprint else {
+            return
+        }
+
+        do {
+            try await assetIndexCache.saveSnapshot(
+                MediaAssetIndexSnapshot(
+                    fingerprint: cachedFingerprint,
+                    assets: assets,
+                    isComplete: hasLoadedCompleteLibrary,
+                    updatedAt: .now
+                )
+            )
+        } catch {
+            authorizationErrorMessage = "Failed to save the local library index."
+        }
+    }
+
+    private func refreshCleanupStateFromScopedAssets() {
+        cleanupSummary = expirationService.upcomingCleanupSummary(for: cleanupScopedAssets)
+        cleanupCandidates = expirationService.cleanupCandidates(from: cleanupScopedAssets, now: .now)
+        updateCleanupPromptState()
+    }
+
+    private func removeAssetFromLocalState(_ asset: MediaAsset) {
+        assets.removeAll { $0.id == asset.id }
+        cleanupScopedAssets.removeAll { $0.id == asset.id }
+        loadedAssetCount = assets.count
+        totalAssetCount = max(totalAssetCount - 1, assets.count)
+        currentOffset = min(currentOffset, assets.count)
+        refreshCleanupStateFromScopedAssets()
+    }
+
+    private func insertAssetBackIntoLocalState(_ asset: MediaAsset) {
+        let insertIndex = assets.firstIndex { existing in
+            asset.createdAt > existing.createdAt
+        } ?? assets.endIndex
+
+        assets.insert(asset, at: insertIndex)
+        if asset.isScreenshot {
+            let screenshotInsertIndex = cleanupScopedAssets.firstIndex { existing in
+                asset.createdAt > existing.createdAt
+            } ?? cleanupScopedAssets.endIndex
+            cleanupScopedAssets.insert(asset, at: screenshotInsertIndex)
+        }
+
+        loadedAssetCount = assets.count
+        totalAssetCount += 1
+        currentOffset = max(currentOffset, assets.count)
+        refreshCleanupStateFromScopedAssets()
+    }
+
+    private func startCleanupSyncIfNeeded() {
+        guard cleanupSyncTask == nil else {
+            return
+        }
+
+        isSyncingCleanupData = true
+        cleanupSyncTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
+            await self.load()
+            await MainActor.run {
+                self.isSyncingCleanupData = false
+                self.cleanupSyncTask = nil
+            }
+        }
+    }
+
+    private func reloadAfterLibraryMutation(scope: LoadScope) async {
+        hasSynchronizedBrowsingThisLaunch = false
+        hasSynchronizedCompleteThisLaunch = false
+        cachedFingerprint = nil
+        await load(scope: scope)
+
+        if scope == .complete {
+            hasSynchronizedBrowsingThisLaunch = true
+            hasSynchronizedCompleteThisLaunch = true
+        } else {
+            hasSynchronizedBrowsingThisLaunch = true
+        }
+    }
+
     private func resetLibraryState() {
         assets = []
+        cleanupScopedAssets = []
         loadedAssetCount = 0
         totalAssetCount = 0
         currentOffset = 0
         hasLoadedCompleteLibrary = false
+        cachedFingerprint = nil
         cleanupSummary = CleanupSummary(
             totalScreenshotCount: 0,
             autoManagedCount: 0,

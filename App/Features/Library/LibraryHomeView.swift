@@ -127,6 +127,7 @@ struct LibraryHomeView: View {
 struct CleanupHomeView: View {
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
+    @State private var reviewIndex = 0
 
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
@@ -134,66 +135,49 @@ struct CleanupHomeView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 18) {
-                    if let message = viewModel.authorizationErrorMessage {
-                        SnapuaryCard(title: "Photo Access") {
-                            Text(message)
-                                .foregroundStyle(.secondary)
+            Group {
+                if let message = viewModel.authorizationErrorMessage {
+                    LibraryAuthorizationView(
+                        message: message,
+                        authorizationStatus: viewModel.authorizationStatus,
+                        onRequestAccess: {
+                            await viewModel.requestPhotoLibraryAccessForBrowsing()
+                            await viewModel.prepareCleanupData()
                         }
+                    )
+                } else {
+                    ScreenshotSlashView(
+                        assets: viewModel.screenshotReviewQueue,
+                        thumbnailStore: viewModel.thumbnailStore,
+                        currentIndex: $reviewIndex,
+                        isRefreshing: viewModel.isSyncingCleanupData,
+                        pendingUndoAsset: viewModel.pendingUndoDelete,
+                        onOpenDetail: { asset in
+                            selectedAsset = asset
+                        },
+                        onKeep: { asset in
+                            await viewModel.protectFromCleanup(asset)
+                            clampReviewIndex()
+                        },
+                        onDelete: { asset in
+                            viewModel.stageDeleteForUndo(asset)
+                            clampReviewIndex()
+                        }
+                    ) {
+                        viewModel.undoPendingDelete()
+                        clampReviewIndex()
                     }
-
-                    SnapshotOverviewCard(viewModel: viewModel)
-                    CleanupReminderCard(viewModel: viewModel)
-                    DefaultCleanupPoolCard(
-                        title: "Default Cleanup Area",
-                        subtitle: "Untagged screenshots automatically collect here until you classify or protect them.",
-                        assets: viewModel.untaggedScreenshotAssets,
-                        thumbnailStore: viewModel.thumbnailStore,
-                        emptyText: "Every screenshot is either tagged, protected, or no screenshots have been found yet.",
-                        onSelect: { selectedAsset = $0 }
-                    )
-                    DefaultCleanupPoolCard(
-                        title: "Tagged Screenshots",
-                        subtitle: "Tagged screenshots stay visible here for review, but are not in the default catch-all bucket.",
-                        assets: viewModel.taggedScreenshotAssets,
-                        thumbnailStore: viewModel.thumbnailStore,
-                        emptyText: "No tagged screenshots yet.",
-                        onSelect: { selectedAsset = $0 }
-                    )
-                    CleanupQueueCard(viewModel: viewModel, onSelect: { selectedAsset = $0 })
+                    .padding()
                 }
-                .padding()
             }
             .navigationTitle("Cleanup")
             .task {
                 if viewModel.authorizationStatus == .notDetermined {
-                    await viewModel.requestPhotoLibraryAccess()
+                    await viewModel.requestPhotoLibraryAccessForBrowsing()
+                    await viewModel.prepareCleanupData()
                 } else {
-                    await viewModel.ensureFullLibraryLoaded()
+                    await viewModel.prepareCleanupData()
                 }
-            }
-            .alert(
-                viewModel.cleanupPromptTitle,
-                isPresented: Binding(
-                    get: { viewModel.shouldPromptForCleanup },
-                    set: { newValue in
-                        if !newValue {
-                            viewModel.dismissCleanupPrompt()
-                        }
-                    }
-                )
-            ) {
-                Button("Later", role: .cancel) {
-                    viewModel.dismissCleanupPrompt()
-                }
-                Button("Clean Now", role: .destructive) {
-                    Task {
-                        await viewModel.runCleanupNow()
-                    }
-                }
-            } message: {
-                Text(viewModel.cleanupPromptMessage)
             }
             .sheet(item: $selectedAsset) { asset in
                 AssetEditorSheet(
@@ -229,6 +213,15 @@ struct CleanupHomeView: View {
         }
 
         return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
+    }
+
+    private func clampReviewIndex() {
+        let count = viewModel.screenshotReviewQueue.count
+        if count == 0 {
+            reviewIndex = 0
+        } else {
+            reviewIndex = min(reviewIndex, count - 1)
+        }
     }
 }
 
@@ -658,11 +651,327 @@ private struct LibraryGrid: View {
     }
 }
 
+private struct ScreenshotSlashView: View {
+    let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
+    @Binding var currentIndex: Int
+    let isRefreshing: Bool
+    let pendingUndoAsset: MediaAsset?
+    let onOpenDetail: (MediaAsset) -> Void
+    let onKeep: (MediaAsset) async -> Void
+    let onDelete: (MediaAsset) async -> Void
+    let onUndoDelete: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            SnapuaryCard(title: "Screenshot Slash") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Left swipe deletes the screenshot from Photos. Right swipe protects it from cleanup.")
+                        .foregroundStyle(.secondary)
+
+                    if isRefreshing {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Refreshing screenshots in the background.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    Text(progressLabel)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let asset = currentAsset {
+                ScreenshotSlashCard(
+                    asset: asset,
+                    nextAsset: nextAsset,
+                    thumbnailStore: thumbnailStore,
+                    onOpenDetail: { onOpenDetail(asset) },
+                    onKeep: {
+                        await onKeep(asset)
+                        advanceAfterAction()
+                    },
+                    onDelete: {
+                        await onDelete(asset)
+                        advanceAfterAction()
+                    }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                SnapuaryCard(title: "All Clear") {
+                    Text("No screenshots are waiting for review.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if let pendingUndoAsset {
+                UndoDeleteBar(asset: pendingUndoAsset, onUndo: onUndoDelete)
+            }
+        }
+        .onChange(of: assets.count) { _, newCount in
+            if newCount == 0 {
+                currentIndex = 0
+            } else {
+                currentIndex = min(currentIndex, newCount - 1)
+            }
+        }
+    }
+
+    private var currentAsset: MediaAsset? {
+        guard assets.indices.contains(currentIndex) else {
+            return assets.first
+        }
+
+        return assets[currentIndex]
+    }
+
+    private var nextAsset: MediaAsset? {
+        let nextIndex = currentIndex + 1
+        guard assets.indices.contains(nextIndex) else {
+            return nil
+        }
+
+        return assets[nextIndex]
+    }
+
+    private var progressLabel: String {
+        guard !assets.isEmpty else {
+            return "0 screenshots left to review."
+        }
+
+        return "\(currentIndex + 1) / \(assets.count)"
+    }
+
+    private func advanceAfterAction() {
+        if assets.isEmpty {
+            currentIndex = 0
+        } else {
+            currentIndex = min(currentIndex, max(assets.count - 1, 0))
+        }
+    }
+}
+
+private struct ScreenshotSlashCard: View {
+    let asset: MediaAsset
+    let nextAsset: MediaAsset?
+    let thumbnailStore: PhotoLibraryThumbnailStore
+    let onOpenDetail: () -> Void
+    let onKeep: () async -> Void
+    let onDelete: () async -> Void
+
+    @State private var dragOffset: CGSize = .zero
+    @State private var isActing = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            ZStack {
+                if let nextAsset {
+                    ReviewCardFace(
+                        asset: nextAsset,
+                        thumbnailStore: thumbnailStore,
+                        overlayOpacity: 0.18
+                    )
+                    .scaleEffect(0.94)
+                    .offset(y: 18)
+                }
+
+                ReviewCardFace(
+                    asset: asset,
+                    thumbnailStore: thumbnailStore,
+                    overlayOpacity: 0
+                )
+                .overlay(alignment: .topLeading) {
+                    slashIndicator
+                        .padding(18)
+                }
+            }
+            .offset(x: dragOffset.width, y: 0)
+            .rotationEffect(.degrees(Double(dragOffset.width / 18)))
+            .gesture(
+                DragGesture(minimumDistance: 12)
+                    .onChanged { value in
+                        guard !isActing else {
+                            return
+                        }
+                        dragOffset = value.translation
+                    }
+                    .onEnded { value in
+                        guard !isActing else {
+                            return
+                        }
+
+                        let horizontal = value.translation.width
+                        if horizontal > 120 {
+                            Task { await performKeep() }
+                        } else if horizontal < -120 {
+                            Task { await performDelete() }
+                        } else {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+                                dragOffset = .zero
+                            }
+                        }
+                    }
+            )
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await performDelete() }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(isActing)
+
+                Button {
+                    onOpenDetail()
+                } label: {
+                    Label("Details", systemImage: "slider.horizontal.3")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(isActing)
+
+                Button {
+                    Task { await performKeep() }
+                } label: {
+                    Label("Keep", systemImage: "bookmark.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .disabled(isActing)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var slashIndicator: some View {
+        if dragOffset.width > 24 {
+            Text("KEEP")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.green)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.thinMaterial, in: Capsule())
+        } else if dragOffset.width < -24 {
+            Text("DELETE")
+                .font(.headline.weight(.bold))
+                .foregroundStyle(.red)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.thinMaterial, in: Capsule())
+        }
+    }
+
+    private func performKeep() async {
+        guard !isActing else {
+            return
+        }
+
+        isActing = true
+        await onKeep()
+        dragOffset = .zero
+        isActing = false
+    }
+
+    private func performDelete() async {
+        guard !isActing else {
+            return
+        }
+
+        isActing = true
+        await onDelete()
+        dragOffset = .zero
+        isActing = false
+    }
+}
+
+private struct ReviewCardFace: View {
+    let asset: MediaAsset
+    let thumbnailStore: PhotoLibraryThumbnailStore
+    let overlayOpacity: Double
+
+    var body: some View {
+        PhotoThumbnailView(asset: asset, thumbnailStore: thumbnailStore, cornerRadius: 28, contentMode: .fit)
+            .frame(maxWidth: .infinity, maxHeight: 440)
+            .background(
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color.black.opacity(overlayOpacity))
+            }
+            .overlay(alignment: .bottomLeading) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(asset.title)
+                        .font(.title3.weight(.semibold))
+                    HStack(spacing: 8) {
+                        if let expirationDate = asset.expirationDate {
+                            Label(
+                                "Expires \(expirationDate.formatted(date: .abbreviated, time: .omitted))",
+                                systemImage: "clock"
+                            )
+                        }
+                        if !asset.tags.isEmpty {
+                            Label("\(asset.tags.count) tag\(asset.tags.count == 1 ? "" : "s")", systemImage: "tag")
+                        }
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(22)
+            }
+    }
+}
+
+private struct UndoDeleteBar: View {
+    let asset: MediaAsset
+    let onUndo: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Screenshot queued for deletion")
+                    .font(.subheadline.weight(.semibold))
+                Text(asset.title)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button("Undo", action: onUndo)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
 private struct SnapshotOverviewCard: View {
     let viewModel: LibraryHomeViewModel
 
     var body: some View {
         SnapuaryCard(title: "Cleanup Overview") {
+            if viewModel.isSyncingCleanupData {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Refreshing cleanup data in the background.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 StatTile(label: "Screenshots", value: "\(viewModel.cleanupSummary.totalScreenshotCount)")
                 StatTile(label: "Auto-managed", value: "\(viewModel.cleanupSummary.autoManagedCount)")

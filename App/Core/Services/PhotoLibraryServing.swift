@@ -4,6 +4,7 @@ import Photos
 protocol PhotoLibraryServing {
     func authorizationStatus() -> PhotoLibraryAuthorizationStatus
     func requestAuthorization() async -> PhotoLibraryAuthorizationStatus
+    func libraryFingerprint() async throws -> PhotoLibraryFingerprint
     func refreshAssetIndex() async throws -> Int
     func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset]
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws
@@ -127,6 +128,14 @@ struct MockPhotoLibraryService: PhotoLibraryServing {
         .authorized
     }
 
+    func libraryFingerprint() async throws -> PhotoLibraryFingerprint {
+        PhotoLibraryFingerprint(
+            totalCount: mockAssets.count,
+            leadingIdentifiers: mockAssets.prefix(8).compactMap(\.libraryIdentifier),
+            trailingIdentifiers: mockAssets.suffix(8).compactMap(\.libraryIdentifier)
+        )
+    }
+
     func refreshAssetIndex() async throws -> Int {
         mockAssets.count
     }
@@ -166,13 +175,22 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
         return status.snapuaryStatus
     }
 
+    func libraryFingerprint() async throws -> PhotoLibraryFingerprint {
+        let status = authorizationStatus()
+        guard status.canReadAssets else {
+            throw PhotoLibraryError.unauthorized(status)
+        }
+
+        return await assetSource.refreshSnapshot(thumbnailStore: thumbnailStore).fingerprint
+    }
+
     func refreshAssetIndex() async throws -> Int {
         let status = authorizationStatus()
         guard status.canReadAssets else {
             throw PhotoLibraryError.unauthorized(status)
         }
 
-        return await assetSource.refresh(thumbnailStore: thumbnailStore)
+        return await assetSource.refreshSnapshot(thumbnailStore: thumbnailStore).fingerprint.totalCount
     }
 
     func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset] {
@@ -268,6 +286,10 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
         await base.requestAuthorization()
     }
 
+    func libraryFingerprint() async throws -> PhotoLibraryFingerprint {
+        try await base.libraryFingerprint()
+    }
+
     func refreshAssetIndex() async throws -> Int {
         try await base.refreshAssetIndex()
     }
@@ -314,7 +336,11 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
 private actor PhotoLibraryAssetSource {
     private var fetchResult: PHFetchResult<PHAsset>?
 
-    func refresh(thumbnailStore: PhotoLibraryThumbnailStore) -> Int {
+    struct Snapshot {
+        let fingerprint: PhotoLibraryFingerprint
+    }
+
+    func refreshSnapshot(thumbnailStore: PhotoLibraryThumbnailStore) -> Snapshot {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         options.includeHiddenAssets = false
@@ -332,7 +358,16 @@ private actor PhotoLibraryAssetSource {
             thumbnailStore.register(assets: warmupAssets)
         }
 
-        return fetchResult.count
+        let fingerprint = PhotoLibraryFingerprint(
+            totalCount: fetchResult.count,
+            leadingIdentifiers: identifiers(in: fetchResult, range: 0..<min(fetchResult.count, 8)),
+            trailingIdentifiers: identifiers(
+                in: fetchResult,
+                range: max(fetchResult.count - 8, 0)..<fetchResult.count
+            )
+        )
+
+        return Snapshot(fingerprint: fingerprint)
     }
 
     func page(
@@ -359,6 +394,21 @@ private actor PhotoLibraryAssetSource {
 
         thumbnailStore.register(assets: photoAssets)
         return pageAssets
+    }
+
+    private func identifiers(in fetchResult: PHFetchResult<PHAsset>, range: Range<Int>) -> [String] {
+        guard !range.isEmpty else {
+            return []
+        }
+
+        var identifiers: [String] = []
+        identifiers.reserveCapacity(range.count)
+
+        for index in range {
+            identifiers.append(fetchResult.object(at: index).localIdentifier)
+        }
+
+        return identifiers
     }
 }
 

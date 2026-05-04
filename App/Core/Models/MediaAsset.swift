@@ -1,6 +1,6 @@
 import Foundation
 
-struct MediaAsset: Identifiable, Hashable {
+struct MediaAsset: Codable, Identifiable, Hashable {
     let id: UUID
     var libraryIdentifier: String?
     var title: String
