@@ -25,26 +25,34 @@ struct LibraryHomeView: View {
                         message: message,
                         authorizationStatus: viewModel.authorizationStatus,
                         onRequestAccess: {
-                            await viewModel.requestPhotoLibraryAccess()
+                            await viewModel.requestPhotoLibraryAccessForBrowsing()
                         }
                     )
                 } else {
-                    ScrollView {
-                        VStack(spacing: 18) {
-                            LibraryHeader(viewModel: viewModel)
-                            LibraryFilterStrip(viewModel: viewModel)
-                            LibraryGrid(
-                                assets: viewModel.visibleAssets,
-                                isLoading: viewModel.isLoading,
-                                loadedAssetCount: viewModel.loadedAssetCount,
-                                columns: gridColumns,
-                                onSelect: { selectedAsset = $0 }
-                            )
-                        }
-                        .padding(.horizontal)
-                        .padding(.top, 12)
-                        .padding(.bottom, 24)
+                    VStack(spacing: 18) {
+                        LibraryHeader(viewModel: viewModel)
+                        LibraryFilterStrip(viewModel: viewModel)
+                        LibraryGrid(
+                            assets: viewModel.visibleAssets,
+                            thumbnailStore: viewModel.thumbnailStore,
+                            isLoading: viewModel.isLoading,
+                            isLoadingMore: viewModel.isLoadingMore,
+                            loadedAssetCount: viewModel.loadedAssetCount,
+                            totalAssetCount: viewModel.totalAssetCount,
+                            progress: viewModel.loadProgress,
+                            columns: gridColumns,
+                            onApproachingEnd: { index in
+                                Task {
+                                    await viewModel.loadMoreIfNeeded(visibleIndex: index)
+                                }
+                            },
+                            onSelect: { selectedAsset = $0 }
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .padding(.horizontal)
+                    .padding(.top, 12)
+                    .padding(.bottom, 24)
                 }
             }
             .navigationTitle("Library")
@@ -52,9 +60,9 @@ struct LibraryHomeView: View {
             .searchable(text: $viewModel.searchText, prompt: "Search title or tag")
             .task {
                 if viewModel.authorizationStatus == .notDetermined {
-                    await viewModel.requestPhotoLibraryAccess()
+                    await viewModel.requestPhotoLibraryAccessForBrowsing()
                 } else {
-                    await viewModel.load()
+                    await viewModel.loadForBrowsing()
                 }
             }
             .alert(
@@ -84,7 +92,7 @@ struct LibraryHomeView: View {
                     asset: asset,
                     tagLibrary: viewModel.tagLibrary,
                     onRefresh: {
-                        await viewModel.load()
+                        await viewModel.loadForBrowsing()
                         selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
                     },
                     onToggleProtection: { await viewModel.toggleProtection(for: asset) },
@@ -141,6 +149,7 @@ struct CleanupHomeView: View {
                         title: "Default Cleanup Area",
                         subtitle: "Untagged screenshots automatically collect here until you classify or protect them.",
                         assets: viewModel.untaggedScreenshotAssets,
+                        thumbnailStore: viewModel.thumbnailStore,
                         emptyText: "Every screenshot is either tagged, protected, or no screenshots have been found yet.",
                         onSelect: { selectedAsset = $0 }
                     )
@@ -148,6 +157,7 @@ struct CleanupHomeView: View {
                         title: "Tagged Screenshots",
                         subtitle: "Tagged screenshots stay visible here for review, but are not in the default catch-all bucket.",
                         assets: viewModel.taggedScreenshotAssets,
+                        thumbnailStore: viewModel.thumbnailStore,
                         emptyText: "No tagged screenshots yet.",
                         onSelect: { selectedAsset = $0 }
                     )
@@ -160,7 +170,7 @@ struct CleanupHomeView: View {
                 if viewModel.authorizationStatus == .notDetermined {
                     await viewModel.requestPhotoLibraryAccess()
                 } else {
-                    await viewModel.load()
+                    await viewModel.ensureFullLibraryLoaded()
                 }
             }
             .alert(
@@ -259,7 +269,7 @@ struct TagHomeView: View {
                                     NavigationLink {
                                         TagDetailView(viewModel: viewModel, tagEntry: entry)
                                     } label: {
-                                        TagFolderRow(entry: entry, assets: tagAssets)
+                                        TagFolderRow(entry: entry, assets: tagAssets, thumbnailStore: viewModel.thumbnailStore)
                                     }
                                 }
                             }
@@ -274,6 +284,8 @@ struct TagHomeView: View {
                     await viewModel.requestPhotoLibraryAccess()
                 } else if viewModel.assets.isEmpty {
                     await viewModel.load()
+                } else {
+                    await viewModel.ensureFullLibraryLoaded()
                 }
             }
         }
@@ -302,31 +314,35 @@ private struct TagDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                SnapuaryCard(title: tagEntry.name) {
-                    HStack(spacing: 12) {
-                        Circle()
-                            .fill(Color(hex: tagEntry.colorHex) ?? .accentColor)
-                            .frame(width: 14, height: 14)
-                        Text(photoCountLabel(for: assets.count))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
+        VStack(spacing: 16) {
+            SnapuaryCard(title: tagEntry.name) {
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(Color(hex: tagEntry.colorHex) ?? .accentColor)
+                        .frame(width: 14, height: 14)
+                    Text(photoCountLabel(for: assets.count))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                 }
-
-                LibraryGrid(
-                    assets: assets,
-                    isLoading: false,
-                    loadedAssetCount: assets.count,
-                    columns: gridColumns,
-                    onSelect: { selectedAsset = $0 }
-                )
             }
-            .padding(.horizontal)
-            .padding(.top, 12)
-            .padding(.bottom, 24)
+
+            LibraryGrid(
+                assets: assets,
+                thumbnailStore: viewModel.thumbnailStore,
+                isLoading: false,
+                isLoadingMore: false,
+                loadedAssetCount: assets.count,
+                totalAssetCount: assets.count,
+                progress: 1,
+                columns: gridColumns,
+                onApproachingEnd: { _ in },
+                onSelect: { selectedAsset = $0 }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .padding(.horizontal)
+        .padding(.top, 12)
+        .padding(.bottom, 24)
         .navigationTitle(tagEntry.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -465,10 +481,11 @@ private struct LibraryAuthorizationView: View {
 private struct TagFolderRow: View {
     let entry: TagLibraryEntry
     let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
 
     var body: some View {
         HStack(spacing: 12) {
-            TagCoverPreview(entry: entry, assets: assets)
+            TagCoverPreview(entry: entry, assets: assets, thumbnailStore: thumbnailStore)
                 .frame(width: 58, height: 58)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -488,6 +505,7 @@ private struct TagFolderRow: View {
 private struct TagCoverPreview: View {
     let entry: TagLibraryEntry
     let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
 
     private let columns = [
         GridItem(.flexible(), spacing: 2),
@@ -505,7 +523,7 @@ private struct TagCoverPreview: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 2) {
                     ForEach(Array(assets.prefix(4))) { asset in
-                        PhotoThumbnailView(asset: asset, cornerRadius: 8)
+                        PhotoThumbnailView(asset: asset, thumbnailStore: thumbnailStore, cornerRadius: 8)
                             .frame(height: 24)
                     }
                 }
@@ -579,17 +597,22 @@ private struct LibraryFilterStrip: View {
 
 private struct LibraryGrid: View {
     let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
     let isLoading: Bool
+    let isLoadingMore: Bool
     let loadedAssetCount: Int
+    let totalAssetCount: Int
+    let progress: Double
     let columns: [GridItem]
+    let onApproachingEnd: (Int) -> Void
     let onSelect: (MediaAsset) -> Void
 
     var body: some View {
         if assets.isEmpty, isLoading {
             SnapuaryCard(title: "Loading Library") {
                 VStack(alignment: .leading, spacing: 10) {
-                    ProgressView()
-                    Text("Scanning your photo library and showing photos as they are discovered.")
+                    ProgressView(value: progress, total: 1)
+                    Text(progressLabel)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -600,26 +623,38 @@ private struct LibraryGrid: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 12) {
-                if isLoading {
-                    HStack(spacing: 10) {
-                        ProgressView()
+                if isLoading || isLoadingMore {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ProgressView(value: progress, total: 1)
                             .controlSize(.small)
-                        Text("Loaded \(loadedAssetCount) photos so far")
+                        Text(progressLabel)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                LazyVGrid(columns: columns, spacing: 3) {
-                    ForEach(assets) { asset in
-                        AssetGridTile(asset: asset) {
-                            onSelect(asset)
-                        }
-                    }
-                }
+                AssetCollectionGridView(
+                    assets: assets,
+                    thumbnailStore: thumbnailStore,
+                    onSelect: onSelect,
+                    onApproachingEnd: onApproachingEnd
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
         }
+    }
+
+    private var progressLabel: String {
+        if totalAssetCount > 0 {
+            if loadedAssetCount >= totalAssetCount {
+                return "Loaded all \(totalAssetCount) photos."
+            }
+
+            let percentage = Int((progress * 100).rounded())
+            return "Loaded \(loadedAssetCount) of \(totalAssetCount) photos (\(percentage)%)."
+        }
+
+        return "Scanning your photo library and showing photos as they are discovered."
     }
 }
 
@@ -745,6 +780,7 @@ private struct DefaultCleanupPoolCard: View {
     let title: String
     let subtitle: String
     let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
     let emptyText: String
     let onSelect: (MediaAsset) -> Void
 
@@ -759,7 +795,7 @@ private struct DefaultCleanupPoolCard: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(assets) { asset in
-                    AssetRow(asset: asset) {
+                    AssetRow(asset: asset, thumbnailStore: thumbnailStore) {
                         onSelect(asset)
                     }
                 }
@@ -770,12 +806,13 @@ private struct DefaultCleanupPoolCard: View {
 
 private struct AssetRow: View {
     let asset: MediaAsset
+    let thumbnailStore: PhotoLibraryThumbnailStore
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 12) {
-                PhotoThumbnailView(asset: asset, cornerRadius: 12)
+                PhotoThumbnailView(asset: asset, thumbnailStore: thumbnailStore, cornerRadius: 12)
                     .frame(width: 52, height: 52)
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -900,10 +937,24 @@ private struct AssetGridTile: View {
 
 private struct PhotoThumbnailView: View {
     let asset: MediaAsset
+    let thumbnailStore: PhotoLibraryThumbnailStore
     let cornerRadius: CGFloat
     var contentMode: ContentMode = .fill
 
     @State private var image: UIImage?
+    @State private var requestID: PHImageRequestID?
+
+    init(
+        asset: MediaAsset,
+        thumbnailStore: PhotoLibraryThumbnailStore = .empty,
+        cornerRadius: CGFloat,
+        contentMode: ContentMode = .fill
+    ) {
+        self.asset = asset
+        self.thumbnailStore = thumbnailStore
+        self.cornerRadius = cornerRadius
+        self.contentMode = contentMode
+    }
 
     var body: some View {
         ZStack {
@@ -924,6 +975,9 @@ private struct PhotoThumbnailView: View {
         .task(id: asset.libraryIdentifier) {
             await loadThumbnailIfNeeded()
         }
+        .onDisappear {
+            thumbnailStore.cancelRequest(requestID)
+        }
     }
 
     @MainActor
@@ -933,23 +987,12 @@ private struct PhotoThumbnailView: View {
             return
         }
 
-        let result = PHAsset.fetchAssets(withLocalIdentifiers: [libraryIdentifier], options: nil)
-        guard let photoAsset = result.firstObject else {
-            return
-        }
-
         let targetSize = CGSize(width: 300, height: 300)
-        let options = PHImageRequestOptions()
-        options.deliveryMode = .opportunistic
-        options.resizeMode = .fast
-        options.isNetworkAccessAllowed = true
-
-        PHCachingImageManager.default().requestImage(
-            for: photoAsset,
+        requestID = thumbnailStore.requestThumbnail(
+            for: libraryIdentifier,
             targetSize: targetSize,
-            contentMode: contentMode == .fill ? .aspectFill : .aspectFit,
-            options: options
-        ) { renderedImage, _ in
+            contentMode: contentMode == .fill ? .aspectFill : .aspectFit
+        ) { renderedImage in
             image = renderedImage
         }
     }

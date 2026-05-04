@@ -30,10 +30,18 @@ struct TagLibraryEntry: Identifiable, Hashable {
 
 @Observable
 final class LibraryHomeViewModel {
+    private enum LoadScope {
+        case browsing
+        case complete
+    }
+
     private let photoLibraryService: PhotoLibraryServing
+    let thumbnailStore: PhotoLibraryThumbnailStore
     private let metadataService: MediaAssetMetadataServing
     private let expirationService: ScreenshotExpirationServing
     private let cleanupSchedulingService: CleanupSchedulingServing
+    private let browsingPageSize = 120
+    private let fullLoadPageSize = 240
 
     private(set) var assets: [MediaAsset] = []
     private(set) var cleanupSummary = CleanupSummary(
@@ -50,7 +58,9 @@ final class LibraryHomeViewModel {
     private(set) var authorizationStatus: PhotoLibraryAuthorizationStatus
     private(set) var authorizationErrorMessage: String?
     private(set) var isLoading = false
+    private(set) var isLoadingMore = false
     private(set) var loadedAssetCount = 0
+    private(set) var totalAssetCount = 0
     private(set) var isRunningCleanup = false
     private(set) var isSchedulingReminder = false
     private(set) var shouldPromptForCleanup = false
@@ -58,68 +68,77 @@ final class LibraryHomeViewModel {
     var selectedTag: MediaTag?
     var selectedCollection: LibraryCollection = .all
     private var hasPromptedForCleanupThisSession = false
+    private var hasLoadedCompleteLibrary = false
+    private var currentOffset = 0
 
     init(
         photoLibraryService: PhotoLibraryServing,
+        thumbnailStore: PhotoLibraryThumbnailStore = .empty,
         metadataService: MediaAssetMetadataServing,
         expirationService: ScreenshotExpirationServing,
         cleanupSchedulingService: CleanupSchedulingServing
     ) {
         self.photoLibraryService = photoLibraryService
+        self.thumbnailStore = thumbnailStore
         self.metadataService = metadataService
         self.expirationService = expirationService
         self.cleanupSchedulingService = cleanupSchedulingService
         self.authorizationStatus = photoLibraryService.authorizationStatus()
     }
 
+    var loadProgress: Double {
+        guard totalAssetCount > 0 else {
+            return 0
+        }
+
+        return min(Double(loadedAssetCount) / Double(totalAssetCount), 1)
+    }
+
+    var hasMoreAssetsToLoad: Bool {
+        loadedAssetCount < totalAssetCount
+    }
+
+    func loadForBrowsing() async {
+        await load(scope: .browsing)
+    }
+
     func load() async {
-        authorizationStatus = photoLibraryService.authorizationStatus()
-        cleanupReminderStatus = await cleanupSchedulingService.authorizationStatus()
-        guard authorizationStatus.canReadAssets else {
-            assets = []
-            authorizationErrorMessage = authorizationMessage(for: authorizationStatus)
-            cleanupSummary = CleanupSummary(
-                totalScreenshotCount: 0,
-                autoManagedCount: 0,
-                expiringSoonCount: 0,
-                protectedCount: 0,
-                readyToCleanCount: 0
-            )
-            cleanupCandidates = []
-            nextCleanupReminder = nil
+        await load(scope: .complete)
+    }
+
+    func loadMoreIfNeeded(visibleIndex _: Int) async {
+        guard hasMoreAssetsToLoad,
+              !isLoading,
+              !isLoadingMore else {
             return
         }
 
-        isLoading = true
-        loadedAssetCount = 0
-        assets = []
-        defer { isLoading = false }
+        await loadNextPage(pageSize: browsingPageSize)
+    }
 
-        do {
-            for try await batch in photoLibraryService.fetchAssetBatches(batchSize: 200) {
-                assets.append(contentsOf: batch)
-                loadedAssetCount = assets.count
-                cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
-                cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
-                updateCleanupPromptState()
-            }
+    func ensureFullLibraryLoaded() async {
+        if assets.isEmpty || totalAssetCount == 0 {
+            await load()
+            return
+        }
 
-            authorizationErrorMessage = nil
-            nextCleanupReminder = nil
-        } catch {
-            assets = []
-            loadedAssetCount = 0
-            authorizationErrorMessage = "Failed to load photos from the library."
-            cleanupSummary = CleanupSummary(
-                totalScreenshotCount: 0,
-                autoManagedCount: 0,
-                expiringSoonCount: 0,
-                protectedCount: 0,
-                readyToCleanCount: 0
-            )
-            cleanupCandidates = []
-            nextCleanupReminder = nil
-            shouldPromptForCleanup = false
+        guard !hasLoadedCompleteLibrary else {
+            return
+        }
+
+        while hasMoreAssetsToLoad {
+            await loadNextPage(pageSize: fullLoadPageSize)
+        }
+
+        hasLoadedCompleteLibrary = true
+    }
+
+    func requestPhotoLibraryAccessForBrowsing() async {
+        authorizationStatus = await photoLibraryService.requestAuthorization()
+        if authorizationStatus.canReadAssets {
+            await loadForBrowsing()
+        } else {
+            authorizationErrorMessage = authorizationMessage(for: authorizationStatus)
         }
     }
 
@@ -529,6 +548,86 @@ final class LibraryHomeViewModel {
         }
     }
 
+    private func load(scope: LoadScope) async {
+        authorizationStatus = photoLibraryService.authorizationStatus()
+        cleanupReminderStatus = await cleanupSchedulingService.authorizationStatus()
+        guard authorizationStatus.canReadAssets else {
+            resetLibraryState()
+            authorizationErrorMessage = authorizationMessage(for: authorizationStatus)
+            nextCleanupReminder = nil
+            return
+        }
+
+        isLoading = true
+        resetLibraryState()
+        defer { isLoading = false }
+
+        do {
+            totalAssetCount = try await photoLibraryService.refreshAssetIndex()
+            let initialPageSize = scope == .browsing ? browsingPageSize : fullLoadPageSize
+            await loadNextPage(pageSize: initialPageSize)
+
+            if scope == .complete {
+                while hasMoreAssetsToLoad {
+                    await loadNextPage(pageSize: fullLoadPageSize)
+                }
+                hasLoadedCompleteLibrary = true
+            }
+
+            authorizationErrorMessage = nil
+            nextCleanupReminder = nil
+        } catch {
+            resetLibraryState()
+            authorizationErrorMessage = "Failed to load photos from the library."
+            nextCleanupReminder = nil
+            shouldPromptForCleanup = false
+        }
+    }
+
+    private func loadNextPage(pageSize: Int) async {
+        guard totalAssetCount > 0,
+              currentOffset < totalAssetCount else {
+            return
+        }
+
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+
+        do {
+            let page = try await photoLibraryService.fetchAssetPage(
+                offset: currentOffset,
+                limit: pageSize
+            )
+
+            guard !page.isEmpty else {
+                currentOffset = totalAssetCount
+                return
+            }
+
+            let chunkSize = min(40, page.count)
+            var nextOffset = currentOffset
+
+            for startIndex in stride(from: 0, to: page.count, by: chunkSize) {
+                let endIndex = min(startIndex + chunkSize, page.count)
+                assets.append(contentsOf: page[startIndex..<endIndex])
+                nextOffset += endIndex - startIndex
+                loadedAssetCount = assets.count
+                cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
+                cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
+                updateCleanupPromptState()
+
+                if endIndex < page.count {
+                    await Task.yield()
+                }
+            }
+
+            currentOffset = nextOffset
+            hasLoadedCompleteLibrary = currentOffset >= totalAssetCount
+        } catch {
+            authorizationErrorMessage = "Failed to load more photos from the library."
+        }
+    }
+
     private func matchesSelectedTag(asset: MediaAsset) -> Bool {
         guard let selectedTag else {
             return true
@@ -582,5 +681,21 @@ final class LibraryHomeViewModel {
         }
 
         shouldPromptForCleanup = !cleanupCandidates.isEmpty
+    }
+
+    private func resetLibraryState() {
+        assets = []
+        loadedAssetCount = 0
+        totalAssetCount = 0
+        currentOffset = 0
+        hasLoadedCompleteLibrary = false
+        cleanupSummary = CleanupSummary(
+            totalScreenshotCount: 0,
+            autoManagedCount: 0,
+            expiringSoonCount: 0,
+            protectedCount: 0,
+            readyToCleanCount: 0
+        )
+        cleanupCandidates = []
     }
 }

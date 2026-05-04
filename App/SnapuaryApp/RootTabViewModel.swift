@@ -16,6 +16,7 @@ final class RootTabViewModel {
     init(container: AppContainer) {
         self.libraryViewModel = LibraryHomeViewModel(
             photoLibraryService: container.photoLibraryService,
+            thumbnailStore: container.thumbnailStore,
             metadataService: container.metadataService,
             expirationService: container.expirationService,
             cleanupSchedulingService: container.cleanupSchedulingService

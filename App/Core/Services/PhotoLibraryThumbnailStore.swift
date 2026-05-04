@@ -1,0 +1,133 @@
+import Foundation
+import Photos
+import UIKit
+
+final class PhotoLibraryThumbnailStore {
+    static let empty = PhotoLibraryThumbnailStore()
+
+    private let imageManager = PHCachingImageManager()
+    private let cache = NSCache<NSString, UIImage>()
+    private let assetLock = NSLock()
+    private var assetsByIdentifier: [String: PHAsset] = [:]
+
+    func register(asset: PHAsset) {
+        assetLock.lock()
+        assetsByIdentifier[asset.localIdentifier] = asset
+        assetLock.unlock()
+    }
+
+    func register(assets: [PHAsset]) {
+        for asset in assets {
+            register(asset: asset)
+        }
+    }
+
+    @discardableResult
+    func requestThumbnail(
+        for localIdentifier: String,
+        targetSize: CGSize,
+        contentMode: PHImageContentMode,
+        completion: @escaping (UIImage?) -> Void
+    ) -> PHImageRequestID? {
+        let cacheKey = thumbnailCacheKey(for: localIdentifier, targetSize: targetSize, contentMode: contentMode)
+        if let cachedImage = cache.object(forKey: cacheKey as NSString) {
+            completion(cachedImage)
+            return nil
+        }
+
+        guard let asset = asset(for: localIdentifier) else {
+            completion(nil)
+            return nil
+        }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .opportunistic
+        options.resizeMode = .fast
+        options.isNetworkAccessAllowed = true
+
+        return imageManager.requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: contentMode,
+            options: options
+        ) { [weak self] image, _ in
+            if let image {
+                self?.cache.setObject(image, forKey: cacheKey as NSString)
+            }
+            completion(image)
+        }
+    }
+
+    func cancelRequest(_ requestID: PHImageRequestID?) {
+        guard let requestID else {
+            return
+        }
+
+        imageManager.cancelImageRequest(requestID)
+    }
+
+    func startCaching(
+        localIdentifiers: [String],
+        targetSize: CGSize,
+        contentMode: PHImageContentMode
+    ) {
+        let assets = localIdentifiers.compactMap { asset(for: $0) }
+        guard !assets.isEmpty else {
+            return
+        }
+
+        imageManager.startCachingImages(
+            for: assets,
+            targetSize: targetSize,
+            contentMode: contentMode,
+            options: nil
+        )
+    }
+
+    func stopCaching(
+        localIdentifiers: [String],
+        targetSize: CGSize,
+        contentMode: PHImageContentMode
+    ) {
+        let assets = localIdentifiers.compactMap { asset(for: $0) }
+        guard !assets.isEmpty else {
+            return
+        }
+
+        imageManager.stopCachingImages(
+            for: assets,
+            targetSize: targetSize,
+            contentMode: contentMode,
+            options: nil
+        )
+    }
+
+    private func asset(for localIdentifier: String) -> PHAsset? {
+        assetLock.lock()
+        if let asset = assetsByIdentifier[localIdentifier] {
+            assetLock.unlock()
+            return asset
+        }
+        assetLock.unlock()
+
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: [localIdentifier], options: nil)
+        guard let asset = result.firstObject else {
+            return nil
+        }
+
+        assetLock.lock()
+        assetsByIdentifier[localIdentifier] = asset
+        assetLock.unlock()
+        return asset
+    }
+
+    private func thumbnailCacheKey(
+        for localIdentifier: String,
+        targetSize: CGSize,
+        contentMode: PHImageContentMode
+    ) -> String {
+        let roundedWidth = Int(targetSize.width.rounded())
+        let roundedHeight = Int(targetSize.height.rounded())
+        return "\(localIdentifier)#\(roundedWidth)x\(roundedHeight)#\(contentMode.rawValue)"
+    }
+}

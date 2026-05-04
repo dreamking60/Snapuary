@@ -22,6 +22,10 @@ struct MediaAsset: Identifiable, Hashable {
 
         return screenshotRule?.expirationDate(createdAt: createdAt, addedAt: addedAt)
     }
+
+    var gridIdentifier: String {
+        libraryIdentifier ?? id.uuidString
+    }
 }
 
 enum MediaAssetKind: String, Codable, Hashable, CaseIterable, Identifiable {

@@ -4,23 +4,19 @@ import Photos
 protocol PhotoLibraryServing {
     func authorizationStatus() -> PhotoLibraryAuthorizationStatus
     func requestAuthorization() async -> PhotoLibraryAuthorizationStatus
-    func fetchAssets() async throws -> [MediaAsset]
-    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error>
+    func refreshAssetIndex() async throws -> Int
+    func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset]
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws
 }
 
 extension PhotoLibraryServing {
-    func fetchAssetBatches(batchSize: Int = 200) -> AsyncThrowingStream<[MediaAsset], Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    continuation.yield(try await fetchAssets())
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
+    func fetchAssets() async throws -> [MediaAsset] {
+        let totalCount = try await refreshAssetIndex()
+        guard totalCount > 0 else {
+            return []
         }
+
+        return try await fetchAssetPage(offset: 0, limit: totalCount)
     }
 }
 
@@ -57,6 +53,72 @@ enum PhotoLibraryError: Error {
 }
 
 struct MockPhotoLibraryService: PhotoLibraryServing {
+    private let mockAssets: [MediaAsset] = [
+        MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "mock-screenshot-1",
+            title: "Order receipt screenshot",
+            createdAt: .now.addingTimeInterval(-86_400),
+            addedAt: .now.addingTimeInterval(-86_400),
+            tags: [
+                MediaTag(id: UUID(), name: "Finance", colorHex: "#E07A5F"),
+                MediaTag(id: UUID(), name: "Receipt", colorHex: "#81B29A")
+            ],
+            kind: .systemScreenshot,
+            screenshotRule: ScreenshotRetentionRule(
+                mode: .preset(.oneMonth),
+                anchor: .creationDate
+            ),
+            isProtectedFromCleanup: false
+        ),
+        MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "mock-screenshot-2",
+            title: "Favorite UI capture",
+            createdAt: .now.addingTimeInterval(-86_400 * 3),
+            addedAt: .now.addingTimeInterval(-86_400 * 3),
+            tags: [
+                MediaTag(id: UUID(), name: "Collection", colorHex: "#3D405B"),
+                MediaTag(id: UUID(), name: "Design", colorHex: "#F2CC8F")
+            ],
+            kind: .systemScreenshot,
+            screenshotRule: ScreenshotRetentionRule(
+                mode: .preset(.oneMonth),
+                anchor: .creationDate
+            ),
+            isProtectedFromCleanup: true
+        ),
+        MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "mock-imported-1",
+            title: "Imported chat capture",
+            createdAt: .now.addingTimeInterval(-86_400 * 14),
+            addedAt: .now.addingTimeInterval(-86_400 * 2),
+            tags: [
+                MediaTag(id: UUID(), name: "Reference", colorHex: "#6D597A")
+            ],
+            kind: .importedScreenshotLike,
+            screenshotRule: ScreenshotRetentionRule(
+                mode: .preset(.oneMonth),
+                anchor: .addedDate
+            ),
+            isProtectedFromCleanup: false
+        ),
+        MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "mock-photo-1",
+            title: "Family dinner",
+            createdAt: .now.addingTimeInterval(-86_400 * 10),
+            addedAt: .now.addingTimeInterval(-86_400 * 10),
+            tags: [
+                MediaTag(id: UUID(), name: "Family", colorHex: "#C8553D")
+            ],
+            kind: .photo,
+            screenshotRule: nil,
+            isProtectedFromCleanup: false
+        )
+    ]
+
     func authorizationStatus() -> PhotoLibraryAuthorizationStatus {
         .authorized
     }
@@ -65,72 +127,17 @@ struct MockPhotoLibraryService: PhotoLibraryServing {
         .authorized
     }
 
-    func fetchAssets() async throws -> [MediaAsset] {
-        [
-            MediaAsset(
-                id: UUID(),
-                libraryIdentifier: "mock-screenshot-1",
-                title: "Order receipt screenshot",
-                createdAt: .now.addingTimeInterval(-86_400),
-                addedAt: .now.addingTimeInterval(-86_400),
-                tags: [
-                    MediaTag(id: UUID(), name: "Finance", colorHex: "#E07A5F"),
-                    MediaTag(id: UUID(), name: "Receipt", colorHex: "#81B29A")
-                ],
-                kind: .systemScreenshot,
-                screenshotRule: ScreenshotRetentionRule(
-                    mode: .preset(.oneMonth),
-                    anchor: .creationDate
-                ),
-                isProtectedFromCleanup: false
-            ),
-            MediaAsset(
-                id: UUID(),
-                libraryIdentifier: "mock-screenshot-2",
-                title: "Favorite UI capture",
-                createdAt: .now.addingTimeInterval(-86_400 * 3),
-                addedAt: .now.addingTimeInterval(-86_400 * 3),
-                tags: [
-                    MediaTag(id: UUID(), name: "Collection", colorHex: "#3D405B"),
-                    MediaTag(id: UUID(), name: "Design", colorHex: "#F2CC8F")
-                ],
-                kind: .systemScreenshot,
-                screenshotRule: ScreenshotRetentionRule(
-                    mode: .preset(.oneMonth),
-                    anchor: .creationDate
-                ),
-                isProtectedFromCleanup: true
-            ),
-            MediaAsset(
-                id: UUID(),
-                libraryIdentifier: "mock-imported-1",
-                title: "Imported chat capture",
-                createdAt: .now.addingTimeInterval(-86_400 * 14),
-                addedAt: .now.addingTimeInterval(-86_400 * 2),
-                tags: [
-                    MediaTag(id: UUID(), name: "Reference", colorHex: "#6D597A")
-                ],
-                kind: .importedScreenshotLike,
-                screenshotRule: ScreenshotRetentionRule(
-                    mode: .preset(.oneMonth),
-                    anchor: .addedDate
-                ),
-                isProtectedFromCleanup: false
-            ),
-            MediaAsset(
-                id: UUID(),
-                libraryIdentifier: "mock-photo-1",
-                title: "Family dinner",
-                createdAt: .now.addingTimeInterval(-86_400 * 10),
-                addedAt: .now.addingTimeInterval(-86_400 * 10),
-                tags: [
-                    MediaTag(id: UUID(), name: "Family", colorHex: "#C8553D")
-                ],
-                kind: .photo,
-                screenshotRule: nil,
-                isProtectedFromCleanup: false
-            )
-        ]
+    func refreshAssetIndex() async throws -> Int {
+        mockAssets.count
+    }
+
+    func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset] {
+        guard limit > 0, offset < mockAssets.count else {
+            return []
+        }
+
+        let endIndex = min(offset + limit, mockAssets.count)
+        return Array(mockAssets[offset..<endIndex])
     }
 
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws {
@@ -138,6 +145,13 @@ struct MockPhotoLibraryService: PhotoLibraryServing {
 }
 
 struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
+    private let thumbnailStore: PhotoLibraryThumbnailStore
+    private let assetSource = PhotoLibraryAssetSource()
+
+    init(thumbnailStore: PhotoLibraryThumbnailStore = .empty) {
+        self.thumbnailStore = thumbnailStore
+    }
+
     func authorizationStatus() -> PhotoLibraryAuthorizationStatus {
         PHPhotoLibrary.authorizationStatus(for: .readWrite).snapuaryStatus
     }
@@ -152,67 +166,30 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
         return status.snapuaryStatus
     }
 
-    func fetchAssets() async throws -> [MediaAsset] {
+    func refreshAssetIndex() async throws -> Int {
         let status = authorizationStatus()
         guard status.canReadAssets else {
             throw PhotoLibraryError.unauthorized(status)
         }
 
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        options.includeHiddenAssets = false
-
-        let screenshotIdentifiers = Self.fetchSystemScreenshotIdentifiers()
-        let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
-        var assets: [MediaAsset] = []
-        assets.reserveCapacity(fetchResult.count)
-
-        fetchResult.enumerateObjects { asset, _, _ in
-            assets.append(Self.map(asset: asset, screenshotIdentifiers: screenshotIdentifiers))
-        }
-
-        return assets
+        return await assetSource.refresh(thumbnailStore: thumbnailStore)
     }
 
-    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error> {
-        let effectiveBatchSize = max(batchSize, 1)
-
-        return AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    let status = authorizationStatus()
-                    guard status.canReadAssets else {
-                        throw PhotoLibraryError.unauthorized(status)
-                    }
-
-                    let options = PHFetchOptions()
-                    options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-                    options.includeHiddenAssets = false
-
-                    let screenshotIdentifiers = Self.fetchSystemScreenshotIdentifiers()
-                    let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
-                    var batch: [MediaAsset] = []
-                    batch.reserveCapacity(effectiveBatchSize)
-
-                    fetchResult.enumerateObjects { asset, _, _ in
-                        batch.append(Self.map(asset: asset, screenshotIdentifiers: screenshotIdentifiers))
-
-                        if batch.count == effectiveBatchSize {
-                            continuation.yield(batch)
-                            batch.removeAll(keepingCapacity: true)
-                        }
-                    }
-
-                    if !batch.isEmpty {
-                        continuation.yield(batch)
-                    }
-
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
+    func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset] {
+        let status = authorizationStatus()
+        guard status.canReadAssets else {
+            throw PhotoLibraryError.unauthorized(status)
         }
+
+        guard limit > 0 else {
+            return []
+        }
+
+        return await assetSource.page(
+            offset: offset,
+            limit: limit,
+            thumbnailStore: thumbnailStore
+        )
     }
 
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws {
@@ -239,28 +216,6 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
                 }
             }
         }
-    }
-
-    static func fetchSystemScreenshotIdentifiers() -> Set<String> {
-        let collections = PHAssetCollection.fetchAssetCollections(
-            with: .smartAlbum,
-            subtype: .smartAlbumScreenshots,
-            options: nil
-        )
-
-        guard let screenshotAlbum = collections.firstObject else {
-            return []
-        }
-
-        let assets = PHAsset.fetchAssets(in: screenshotAlbum, options: nil)
-        var identifiers = Set<String>()
-        identifiers.reserveCapacity(assets.count)
-
-        assets.enumerateObjects { asset, _, _ in
-            identifiers.insert(asset.localIdentifier)
-        }
-
-        return identifiers
     }
 
     static func map(asset: PHAsset, screenshotIdentifiers: Set<String> = []) -> MediaAsset {
@@ -313,8 +268,12 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
         await base.requestAuthorization()
     }
 
-    func fetchAssets() async throws -> [MediaAsset] {
-        async let assetsTask = base.fetchAssets()
+    func refreshAssetIndex() async throws -> Int {
+        try await base.refreshAssetIndex()
+    }
+
+    func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset] {
+        async let assetsTask = base.fetchAssetPage(offset: offset, limit: limit)
         async let metadataTask = metadataStore.fetchAllMetadata()
 
         let (assets, metadataByIdentifier) = try await (assetsTask, metadataTask)
@@ -325,33 +284,6 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
             }
 
             return merge(asset: asset, metadata: metadata)
-        }
-    }
-
-    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error> {
-        AsyncThrowingStream { continuation in
-            Task {
-                do {
-                    let metadataByIdentifier = try await metadataStore.fetchAllMetadata()
-
-                    for try await batch in base.fetchAssetBatches(batchSize: batchSize) {
-                        let mergedBatch = batch.map { asset in
-                            guard let libraryIdentifier = asset.libraryIdentifier,
-                                  let metadata = metadataByIdentifier[libraryIdentifier] else {
-                                return asset
-                            }
-
-                            return merge(asset: asset, metadata: metadata)
-                        }
-
-                        continuation.yield(mergedBatch)
-                    }
-
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
-            }
         }
     }
 
@@ -376,6 +308,57 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
         }
 
         return mergedAsset
+    }
+}
+
+private actor PhotoLibraryAssetSource {
+    private var fetchResult: PHFetchResult<PHAsset>?
+
+    func refresh(thumbnailStore: PhotoLibraryThumbnailStore) -> Int {
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        options.includeHiddenAssets = false
+
+        let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
+        self.fetchResult = fetchResult
+
+        let initialWarmupCount = min(fetchResult.count, 180)
+        if initialWarmupCount > 0 {
+            var warmupAssets: [PHAsset] = []
+            warmupAssets.reserveCapacity(initialWarmupCount)
+            for index in 0..<initialWarmupCount {
+                warmupAssets.append(fetchResult.object(at: index))
+            }
+            thumbnailStore.register(assets: warmupAssets)
+        }
+
+        return fetchResult.count
+    }
+
+    func page(
+        offset: Int,
+        limit: Int,
+        thumbnailStore: PhotoLibraryThumbnailStore
+    ) -> [MediaAsset] {
+        guard let fetchResult,
+              offset < fetchResult.count else {
+            return []
+        }
+
+        let endIndex = min(offset + limit, fetchResult.count)
+        var pageAssets: [MediaAsset] = []
+        pageAssets.reserveCapacity(endIndex - offset)
+        var photoAssets: [PHAsset] = []
+        photoAssets.reserveCapacity(endIndex - offset)
+
+        for index in offset..<endIndex {
+            let asset = fetchResult.object(at: index)
+            photoAssets.append(asset)
+            pageAssets.append(PhotoKitPhotoLibraryService.map(asset: asset))
+        }
+
+        thumbnailStore.register(assets: photoAssets)
+        return pageAssets
     }
 }
 
