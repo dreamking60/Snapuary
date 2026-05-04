@@ -3,6 +3,7 @@ import Observation
 
 enum RootTab: Hashable {
     case library
+    case tags
     case cleanup
 }
 

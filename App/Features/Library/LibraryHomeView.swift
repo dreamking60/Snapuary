@@ -220,6 +220,219 @@ struct CleanupHomeView: View {
     }
 }
 
+struct TagHomeView: View {
+    @State private var viewModel: LibraryHomeViewModel
+
+    init(viewModel: LibraryHomeViewModel) {
+        _viewModel = State(initialValue: viewModel)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if let message = viewModel.authorizationErrorMessage {
+                    LibraryAuthorizationView(
+                        message: message,
+                        authorizationStatus: viewModel.authorizationStatus,
+                        onRequestAccess: {
+                            await viewModel.requestPhotoLibraryAccess()
+                        }
+                    )
+                } else {
+                    List {
+                        Section {
+                            Text("Manage your library by tag, like folders. Open a tag to see every photo inside it.")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if viewModel.tagLibrary.isEmpty {
+                            Section("Tags") {
+                                Text("No tags yet. Open a photo in Library and add tags first.")
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Section("Tags") {
+                                ForEach(viewModel.tagLibrary) { entry in
+                                    let tagAssets = viewModel.assets(for: entry)
+                                    NavigationLink {
+                                        TagDetailView(viewModel: viewModel, tagEntry: entry)
+                                    } label: {
+                                        TagFolderRow(entry: entry, assets: tagAssets)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .navigationTitle("Tags")
+            .task {
+                if viewModel.authorizationStatus == .notDetermined {
+                    await viewModel.requestPhotoLibraryAccess()
+                } else if viewModel.assets.isEmpty {
+                    await viewModel.load()
+                }
+            }
+        }
+    }
+}
+
+private struct TagDetailView: View {
+    @State private var viewModel: LibraryHomeViewModel
+    let tagEntry: TagLibraryEntry
+    @State private var selectedAsset: MediaAsset?
+    @State private var isShowingRenamePrompt = false
+    @State private var isShowingDeleteConfirmation = false
+    @State private var isShowingMergePrompt = false
+    @State private var draftTagName = ""
+    @State private var mergeTargetID = ""
+
+    private let gridColumns = [
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3),
+        GridItem(.flexible(), spacing: 3)
+    ]
+
+    init(viewModel: LibraryHomeViewModel, tagEntry: TagLibraryEntry) {
+        _viewModel = State(initialValue: viewModel)
+        self.tagEntry = tagEntry
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                SnapuaryCard(title: tagEntry.name) {
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(Color(hex: tagEntry.colorHex) ?? .accentColor)
+                            .frame(width: 14, height: 14)
+                        Text("\(assets.count) photo\(assets.count == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                    }
+                }
+
+                LibraryGrid(
+                    assets: assets,
+                    columns: gridColumns,
+                    onSelect: { selectedAsset = $0 }
+                )
+            }
+            .padding(.horizontal)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
+        }
+        .navigationTitle(tagEntry.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu("Manage") {
+                    Button("Rename") {
+                        draftTagName = tagEntry.name
+                        isShowingRenamePrompt = true
+                    }
+
+                    Button("Merge Into...") {
+                        mergeTargetID = mergeTargets.first?.id ?? ""
+                        isShowingMergePrompt = true
+                    }
+                    .disabled(mergeTargets.isEmpty)
+
+                    Button("Delete Tag", role: .destructive) {
+                        isShowingDeleteConfirmation = true
+                    }
+                }
+            }
+        }
+        .alert("Rename Tag", isPresented: $isShowingRenamePrompt) {
+            TextField("Tag name", text: $draftTagName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                Task {
+                    await viewModel.renameTag(tagEntry, to: draftTagName)
+                    await viewModel.load()
+                }
+            }
+        } message: {
+            Text("Update this tag across every photo that uses it.")
+        }
+        .alert("Delete Tag?", isPresented: $isShowingDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task {
+                    await viewModel.deleteTag(tagEntry)
+                    await viewModel.load()
+                }
+            }
+        } message: {
+            Text("This removes the tag from every photo that currently uses it.")
+        }
+        .alert("Merge Tag", isPresented: $isShowingMergePrompt) {
+            Picker("Merge into", selection: $mergeTargetID) {
+                ForEach(mergeTargets) { entry in
+                    Text(entry.name).tag(entry.id)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+            Button("Merge") {
+                guard let destination = mergeTargets.first(where: { $0.id == mergeTargetID }) else {
+                    return
+                }
+                Task {
+                    await viewModel.mergeTag(tagEntry, into: destination)
+                    await viewModel.load()
+                }
+            }
+        } message: {
+            Text("Every photo using \(tagEntry.name) will be reassigned to the selected tag.")
+        }
+        .sheet(item: $selectedAsset) { asset in
+            AssetEditorSheet(
+                asset: asset,
+                tagLibrary: viewModel.tagLibrary,
+                onRefresh: {
+                    await viewModel.load()
+                    selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
+                },
+                onToggleProtection: { await viewModel.toggleProtection(for: asset) },
+                onToggleScreenshotLike: { await viewModel.toggleImportedScreenshotLike(for: asset) },
+                onApplyRetentionRule: { rule in
+                    await viewModel.applyRetentionRule(rule, to: asset)
+                },
+                onAddTag: { name, colorHex in
+                    await viewModel.addTag(name: name, colorHex: colorHex, to: asset)
+                },
+                onAddTags: { entries in
+                    await viewModel.addTags(entries, to: asset)
+                },
+                onRemoveTag: { tag in
+                    await viewModel.removeTag(tag, from: asset)
+                }
+            )
+            .presentationDetents([.large])
+        }
+    }
+
+    private var assets: [MediaAsset] {
+        viewModel.assets(for: tagEntry)
+    }
+
+    private var mergeTargets: [TagLibraryEntry] {
+        viewModel.tagLibrary.filter { $0.id != tagEntry.id }
+    }
+
+    private func refreshedAsset(from asset: MediaAsset, in assets: [MediaAsset]) -> MediaAsset? {
+        guard let libraryIdentifier = asset.libraryIdentifier else {
+            return assets.first(where: { $0.id == asset.id })
+        }
+
+        return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
+    }
+}
+
 private struct LibraryAuthorizationView: View {
     let message: String
     let authorizationStatus: PhotoLibraryAuthorizationStatus
@@ -242,6 +455,60 @@ private struct LibraryAuthorizationView: View {
             }
             .padding()
         }
+    }
+}
+
+private struct TagFolderRow: View {
+    let entry: TagLibraryEntry
+    let assets: [MediaAsset]
+
+    var body: some View {
+        HStack(spacing: 12) {
+            TagCoverPreview(entry: entry, assets: assets)
+                .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.name)
+                    .font(.headline)
+                Text("\(assets.count) photo\(assets.count == 1 ? "" : "s")")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct TagCoverPreview: View {
+    let entry: TagLibraryEntry
+    let assets: [MediaAsset]
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 2),
+        GridItem(.flexible(), spacing: 2)
+    ]
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill((Color(hex: entry.colorHex) ?? .accentColor).opacity(0.14))
+
+            if assets.isEmpty {
+                Image(systemName: "folder.fill")
+                    .foregroundStyle(Color(hex: entry.colorHex) ?? .accentColor)
+            } else {
+                LazyVGrid(columns: columns, spacing: 2) {
+                    ForEach(Array(assets.prefix(4))) { asset in
+                        PhotoThumbnailView(asset: asset, cornerRadius: 8)
+                            .frame(height: 24)
+                    }
+                }
+                .padding(4)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 

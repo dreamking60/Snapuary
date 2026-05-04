@@ -196,6 +196,12 @@ final class LibraryHomeViewModel {
         screenshotAssets.filter { !$0.tags.isEmpty }
     }
 
+    func assets(for tagEntry: TagLibraryEntry) -> [MediaAsset] {
+        assets.filter { asset in
+            asset.tags.contains { $0.normalizedName == tagEntry.normalizedName }
+        }
+    }
+
     func toggleTag(_ tag: MediaTag) {
         if selectedTag?.normalizedName == tag.normalizedName {
             selectedTag = nil
@@ -298,6 +304,132 @@ final class LibraryHomeViewModel {
             selectedTag = nil
         }
         await persistMetadata(for: assets[index])
+    }
+
+    func renameTag(_ tagEntry: TagLibraryEntry, to newName: String) async {
+        let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            return
+        }
+
+        let newNormalizedName = trimmedName.lowercased()
+        let oldNormalizedName = tagEntry.normalizedName
+        guard newNormalizedName != oldNormalizedName else {
+            return
+        }
+
+        var updatedIndexes: [Int] = []
+
+        for index in assets.indices {
+            guard assets[index].tags.contains(where: { $0.normalizedName == oldNormalizedName }) else {
+                continue
+            }
+
+            let alreadyHasRenamedTag = assets[index].tags.contains(where: { $0.normalizedName == newNormalizedName })
+            var rewrittenTags: [MediaTag] = []
+            rewrittenTags.reserveCapacity(assets[index].tags.count)
+
+            for tag in assets[index].tags {
+                guard tag.normalizedName == oldNormalizedName else {
+                    rewrittenTags.append(tag)
+                    continue
+                }
+
+                if alreadyHasRenamedTag {
+                    continue
+                }
+
+                rewrittenTags.append(
+                    MediaTag(
+                        id: tag.id,
+                        name: trimmedName,
+                        colorHex: tag.colorHex
+                    )
+                )
+            }
+
+            assets[index].tags = rewrittenTags
+            updatedIndexes.append(index)
+        }
+
+        if selectedTag?.normalizedName == oldNormalizedName {
+            selectedTag = assets
+                .flatMap(\.tags)
+                .first(where: { $0.normalizedName == newNormalizedName })
+        }
+
+        for index in updatedIndexes {
+            await persistMetadata(for: assets[index])
+        }
+    }
+
+    func deleteTag(_ tagEntry: TagLibraryEntry) async {
+        let normalizedName = tagEntry.normalizedName
+        var updatedIndexes: [Int] = []
+
+        for index in assets.indices {
+            let originalCount = assets[index].tags.count
+            assets[index].tags.removeAll { $0.normalizedName == normalizedName }
+            if assets[index].tags.count != originalCount {
+                updatedIndexes.append(index)
+            }
+        }
+
+        if selectedTag?.normalizedName == normalizedName {
+            selectedTag = nil
+        }
+
+        for index in updatedIndexes {
+            await persistMetadata(for: assets[index])
+        }
+    }
+
+    func mergeTag(_ source: TagLibraryEntry, into destination: TagLibraryEntry) async {
+        guard source.normalizedName != destination.normalizedName else {
+            return
+        }
+
+        var updatedIndexes: [Int] = []
+
+        for index in assets.indices {
+            let hasSource = assets[index].tags.contains(where: { $0.normalizedName == source.normalizedName })
+            guard hasSource else {
+                continue
+            }
+
+            let hasDestination = assets[index].tags.contains(where: { $0.normalizedName == destination.normalizedName })
+            var rewrittenTags: [MediaTag] = []
+            rewrittenTags.reserveCapacity(assets[index].tags.count)
+
+            for tag in assets[index].tags {
+                if tag.normalizedName == source.normalizedName {
+                    if !hasDestination {
+                        rewrittenTags.append(
+                            MediaTag(
+                                id: tag.id,
+                                name: destination.name,
+                                colorHex: destination.colorHex
+                            )
+                        )
+                    }
+                } else {
+                    rewrittenTags.append(tag)
+                }
+            }
+
+            assets[index].tags = rewrittenTags
+            updatedIndexes.append(index)
+        }
+
+        if selectedTag?.normalizedName == source.normalizedName {
+            selectedTag = assets
+                .flatMap(\.tags)
+                .first(where: { $0.normalizedName == destination.normalizedName })
+        }
+
+        for index in updatedIndexes {
+            await persistMetadata(for: assets[index])
+        }
     }
 
     func runCleanupNow() async {

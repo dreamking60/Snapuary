@@ -15,6 +15,12 @@ struct RootTabView: View {
                 }
                 .tag(RootTab.library)
 
+            TagHomeView(viewModel: viewModel.makeLibraryViewModel())
+                .tabItem {
+                    Label("Tags", systemImage: "folder")
+                }
+                .tag(RootTab.tags)
+
             CleanupHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
                     Label("Cleanup", systemImage: "trash")
