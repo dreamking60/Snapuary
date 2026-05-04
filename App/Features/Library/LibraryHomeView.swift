@@ -35,6 +35,8 @@ struct LibraryHomeView: View {
                             LibraryFilterStrip(viewModel: viewModel)
                             LibraryGrid(
                                 assets: viewModel.visibleAssets,
+                                isLoading: viewModel.isLoading,
+                                loadedAssetCount: viewModel.loadedAssetCount,
                                 columns: gridColumns,
                                 onSelect: { selectedAsset = $0 }
                             )
@@ -307,7 +309,7 @@ private struct TagDetailView: View {
                         Circle()
                             .fill(Color(hex: tagEntry.colorHex) ?? .accentColor)
                             .frame(width: 14, height: 14)
-                        Text("\(assets.count) photo\(assets.count == 1 ? "" : "s")")
+                        Text(photoCountLabel(for: assets.count))
                             .foregroundStyle(.secondary)
                         Spacer()
                     }
@@ -315,6 +317,8 @@ private struct TagDetailView: View {
 
                 LibraryGrid(
                     assets: assets,
+                    isLoading: false,
+                    loadedAssetCount: assets.count,
                     columns: gridColumns,
                     onSelect: { selectedAsset = $0 }
                 )
@@ -470,7 +474,7 @@ private struct TagFolderRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(entry.name)
                     .font(.headline)
-                Text("\(assets.count) photo\(assets.count == 1 ? "" : "s")")
+                Text(photoCountLabel(for: assets.count))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -575,24 +579,46 @@ private struct LibraryFilterStrip: View {
 
 private struct LibraryGrid: View {
     let assets: [MediaAsset]
+    let isLoading: Bool
+    let loadedAssetCount: Int
     let columns: [GridItem]
     let onSelect: (MediaAsset) -> Void
 
     var body: some View {
-        if assets.isEmpty {
+        if assets.isEmpty, isLoading {
+            SnapuaryCard(title: "Loading Library") {
+                VStack(alignment: .leading, spacing: 10) {
+                    ProgressView()
+                    Text("Scanning your photo library and showing photos as they are discovered.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if assets.isEmpty {
             SnapuaryCard(title: "No Results") {
                 Text("No photos match the current collection, search, or tag filter.")
                     .foregroundStyle(.secondary)
             }
         } else {
-            LazyVGrid(columns: columns, spacing: 3) {
-                ForEach(assets) { asset in
-                    AssetGridTile(asset: asset) {
-                        onSelect(asset)
+            VStack(alignment: .leading, spacing: 12) {
+                if isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loaded \(loadedAssetCount) photos so far")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
+
+                LazyVGrid(columns: columns, spacing: 3) {
+                    ForEach(assets) { asset in
+                        AssetGridTile(asset: asset) {
+                            onSelect(asset)
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
     }
 }
@@ -1242,6 +1268,10 @@ private struct AssetTagManagerView: View {
             selectedBatchTagIDs.insert(entry.id)
         }
     }
+}
+
+private func photoCountLabel(for count: Int) -> String {
+    "\(count) photo" + (count == 1 ? "" : "s")
 }
 
 private struct EditorRow: View {

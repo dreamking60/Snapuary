@@ -50,6 +50,7 @@ final class LibraryHomeViewModel {
     private(set) var authorizationStatus: PhotoLibraryAuthorizationStatus
     private(set) var authorizationErrorMessage: String?
     private(set) var isLoading = false
+    private(set) var loadedAssetCount = 0
     private(set) var isRunningCleanup = false
     private(set) var isSchedulingReminder = false
     private(set) var shouldPromptForCleanup = false
@@ -90,18 +91,24 @@ final class LibraryHomeViewModel {
         }
 
         isLoading = true
+        loadedAssetCount = 0
+        assets = []
         defer { isLoading = false }
 
         do {
-            let assets = try await photoLibraryService.fetchAssets()
-            self.assets = assets
+            for try await batch in photoLibraryService.fetchAssetBatches(batchSize: 200) {
+                assets.append(contentsOf: batch)
+                loadedAssetCount = assets.count
+                cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
+                cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
+                updateCleanupPromptState()
+            }
+
             authorizationErrorMessage = nil
-            cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
-            cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
             nextCleanupReminder = nil
-            updateCleanupPromptState()
         } catch {
             assets = []
+            loadedAssetCount = 0
             authorizationErrorMessage = "Failed to load photos from the library."
             cleanupSummary = CleanupSummary(
                 totalScreenshotCount: 0,
@@ -562,6 +569,7 @@ final class LibraryHomeViewModel {
     }
 
     private func recalculateCleanupState() {
+        loadedAssetCount = assets.count
         cleanupSummary = expirationService.upcomingCleanupSummary(for: assets)
         cleanupCandidates = expirationService.cleanupCandidates(from: assets, now: .now)
         updateCleanupPromptState()

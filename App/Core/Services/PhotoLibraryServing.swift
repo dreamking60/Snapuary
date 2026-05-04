@@ -5,7 +5,23 @@ protocol PhotoLibraryServing {
     func authorizationStatus() -> PhotoLibraryAuthorizationStatus
     func requestAuthorization() async -> PhotoLibraryAuthorizationStatus
     func fetchAssets() async throws -> [MediaAsset]
+    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error>
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws
+}
+
+extension PhotoLibraryServing {
+    func fetchAssetBatches(batchSize: Int = 200) -> AsyncThrowingStream<[MediaAsset], Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    continuation.yield(try await fetchAssets())
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
 }
 
 enum PhotoLibraryAuthorizationStatus: String, Hashable {
@@ -158,6 +174,47 @@ struct PhotoKitPhotoLibraryService: PhotoLibraryServing {
         return assets
     }
 
+    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error> {
+        let effectiveBatchSize = max(batchSize, 1)
+
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let status = authorizationStatus()
+                    guard status.canReadAssets else {
+                        throw PhotoLibraryError.unauthorized(status)
+                    }
+
+                    let options = PHFetchOptions()
+                    options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+                    options.includeHiddenAssets = false
+
+                    let screenshotIdentifiers = Self.fetchSystemScreenshotIdentifiers()
+                    let fetchResult = PHAsset.fetchAssets(with: .image, options: options)
+                    var batch: [MediaAsset] = []
+                    batch.reserveCapacity(effectiveBatchSize)
+
+                    fetchResult.enumerateObjects { asset, _, _ in
+                        batch.append(Self.map(asset: asset, screenshotIdentifiers: screenshotIdentifiers))
+
+                        if batch.count == effectiveBatchSize {
+                            continuation.yield(batch)
+                            batch.removeAll(keepingCapacity: true)
+                        }
+                    }
+
+                    if !batch.isEmpty {
+                        continuation.yield(batch)
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws {
         guard !identifiers.isEmpty else {
             return
@@ -268,6 +325,33 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
             }
 
             return merge(asset: asset, metadata: metadata)
+        }
+    }
+
+    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let metadataByIdentifier = try await metadataStore.fetchAllMetadata()
+
+                    for try await batch in base.fetchAssetBatches(batchSize: batchSize) {
+                        let mergedBatch = batch.map { asset in
+                            guard let libraryIdentifier = asset.libraryIdentifier,
+                                  let metadata = metadataByIdentifier[libraryIdentifier] else {
+                                return asset
+                            }
+
+                            return merge(asset: asset, metadata: metadata)
+                        }
+
+                        continuation.yield(mergedBatch)
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
         }
     }
 

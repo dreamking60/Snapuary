@@ -364,6 +364,51 @@ final class SnapuaryTests: XCTestCase {
 
         XCTAssertEqual(reminder?.candidateCount, 1)
     }
+
+    func inMemoryPhotoLibraryServiceCanYieldAssetsInBatches() async throws {
+        let service = InMemoryPhotoLibraryService(assets: [
+            MediaAsset(
+                id: UUID(),
+                libraryIdentifier: "batch-1",
+                title: "First",
+                createdAt: .now,
+                addedAt: .now,
+                tags: [],
+                kind: .photo,
+                screenshotRule: nil,
+                isProtectedFromCleanup: false
+            ),
+            MediaAsset(
+                id: UUID(),
+                libraryIdentifier: "batch-2",
+                title: "Second",
+                createdAt: .now,
+                addedAt: .now,
+                tags: [],
+                kind: .photo,
+                screenshotRule: nil,
+                isProtectedFromCleanup: false
+            ),
+            MediaAsset(
+                id: UUID(),
+                libraryIdentifier: "batch-3",
+                title: "Third",
+                createdAt: .now,
+                addedAt: .now,
+                tags: [],
+                kind: .photo,
+                screenshotRule: nil,
+                isProtectedFromCleanup: false
+            )
+        ])
+
+        var batches: [[String]] = []
+        for try await batch in service.fetchAssetBatches(batchSize: 2) {
+            batches.append(batch.compactMap(\.libraryIdentifier))
+        }
+
+        XCTAssertEqual(batches, [["batch-1", "batch-2"], ["batch-3"]])
+    }
 }
 
 actor InMemoryMediaAssetMetadataStore: MediaAssetMetadataServing {
@@ -405,6 +450,24 @@ final class InMemoryPhotoLibraryService: PhotoLibraryServing {
 
     func fetchAssets() async throws -> [MediaAsset] {
         assets
+    }
+
+    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error> {
+        let effectiveBatchSize = max(batchSize, 1)
+
+        return AsyncThrowingStream { continuation in
+            Task {
+                var startIndex = assets.startIndex
+
+                while startIndex < assets.endIndex {
+                    let endIndex = min(startIndex + effectiveBatchSize, assets.endIndex)
+                    continuation.yield(Array(assets[startIndex..<endIndex]))
+                    startIndex = endIndex
+                }
+
+                continuation.finish()
+            }
+        }
     }
 
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws {

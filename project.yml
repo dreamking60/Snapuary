@@ -1,7 +1,7 @@
 name: Snapuary
 options:
   projectFormat: 60
-  xcodeVersion: "15.4"
+  xcodeVersion: "26.4.1"
   bundleIdPrefix: com.dreamking
   deploymentTarget:
     iOS: "17.0"
