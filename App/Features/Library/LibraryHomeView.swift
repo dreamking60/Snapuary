@@ -18,7 +18,7 @@ struct LibraryHomeView: View {
     }
 
     var body: some View {
-        let _ = settings.preferredLanguage
+        let languageRefreshKey = settings.preferredLanguage.rawValue
         @Bindable var viewModel = viewModel
 
         NavigationStack {
@@ -57,6 +57,7 @@ struct LibraryHomeView: View {
                     .padding(.horizontal)
                     .padding(.top, 12)
                     .padding(.bottom, 24)
+                    .id(languageRefreshKey)
                 }
             }
             .navigationTitle(L10n.text("library.title", fallback: "Library"))
@@ -154,7 +155,7 @@ struct CleanupHomeView: View {
     }
 
     var body: some View {
-        let _ = settings.preferredLanguage
+        let languageRefreshKey = settings.preferredLanguage.rawValue
         NavigationStack {
             Group {
                 if !viewModel.authorizationStatus.canReadAssets,
@@ -203,6 +204,7 @@ struct CleanupHomeView: View {
                         clampReviewIndex()
                     }
                     .padding()
+                    .id(languageRefreshKey)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -292,7 +294,7 @@ struct TagHomeView: View {
     }
 
     var body: some View {
-        let _ = settings.preferredLanguage
+        let languageRefreshKey = settings.preferredLanguage.rawValue
         NavigationStack {
             Group {
                 if let message = viewModel.authorizationErrorMessage {
@@ -329,6 +331,7 @@ struct TagHomeView: View {
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .id(languageRefreshKey)
                 }
             }
             .navigationTitle(L10n.text("tab.tags", fallback: "Tags"))
@@ -969,8 +972,6 @@ private struct ScreenshotSlashCard: View {
                 ActionOrbButton(
                     title: L10n.text("cleanup.queue", fallback: "Queue"),
                     systemImage: "trash.fill",
-                    tint: .red,
-                    material: .regularMaterial,
                     isEnabled: !isActing
                 ) {
                     Task { await performDelete() }
@@ -979,8 +980,6 @@ private struct ScreenshotSlashCard: View {
                 ActionOrbButton(
                     title: L10n.text("cleanup.inspect", fallback: "Inspect"),
                     systemImage: "slider.horizontal.3",
-                    tint: .primary,
-                    material: .ultraThinMaterial,
                     isEnabled: !isActing,
                     action: onOpenDetail
                 )
@@ -988,8 +987,6 @@ private struct ScreenshotSlashCard: View {
                 ActionOrbButton(
                     title: L10n.text("cleanup.keep", fallback: "Keep"),
                     systemImage: "bookmark.fill",
-                    tint: .green,
-                    material: .regularMaterial,
                     isEnabled: !isActing
                 ) {
                     Task { await performKeep() }
@@ -1204,8 +1201,6 @@ private extension ReviewCardFace {
 private struct ActionOrbButton: View {
     let title: String
     let systemImage: String
-    let tint: Color
-    let material: Material
     let isEnabled: Bool
     let action: () -> Void
 
@@ -1214,17 +1209,17 @@ private struct ActionOrbButton: View {
             VStack(spacing: 10) {
                 Image(systemName: systemImage)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(.blue)
                     .frame(width: 58, height: 58)
-                    .background(material, in: Circle())
-                    .overlay {
+                    .background(
                         Circle()
-                            .strokeBorder(tint.opacity(0.18), lineWidth: 1)
-                    }
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                    .shadow(color: Color.black.opacity(0.08), radius: 12, y: 8)
 
                 Text(title)
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.blue)
             }
             .frame(maxWidth: .infinity)
         }
