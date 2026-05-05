@@ -20,7 +20,8 @@ struct LibraryHomeView: View {
 
         NavigationStack {
             Group {
-                if let message = viewModel.authorizationErrorMessage {
+                if !viewModel.authorizationStatus.canReadAssets,
+                   let message = viewModel.authorizationErrorMessage {
                     LibraryAuthorizationView(
                         message: message,
                         authorizationStatus: viewModel.authorizationStatus,
@@ -136,7 +137,8 @@ struct CleanupHomeView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let message = viewModel.authorizationErrorMessage {
+                if !viewModel.authorizationStatus.canReadAssets,
+                   let message = viewModel.authorizationErrorMessage {
                     LibraryAuthorizationView(
                         message: message,
                         authorizationStatus: viewModel.authorizationStatus,
@@ -151,7 +153,10 @@ struct CleanupHomeView: View {
                         thumbnailStore: viewModel.thumbnailStore,
                         currentIndex: $reviewIndex,
                         isRefreshing: viewModel.isSyncingCleanupData,
-                        pendingUndoAsset: viewModel.pendingUndoDelete,
+                        pendingDeletionCount: viewModel.pendingDeletionCount,
+                        pendingDeletionLimit: viewModel.pendingDeletionLimit,
+                        pendingDeletionPreviewAsset: viewModel.lastPendingDeletionAsset,
+                        isCommittingDeletion: viewModel.isRunningCleanup,
                         onOpenDetail: { asset in
                             selectedAsset = asset
                         },
@@ -160,11 +165,17 @@ struct CleanupHomeView: View {
                             clampReviewIndex()
                         },
                         onDelete: { asset in
-                            viewModel.stageDeleteForUndo(asset)
-                            clampReviewIndex()
+                            let staged = viewModel.stageAssetForDeletion(asset)
+                            if staged {
+                                clampReviewIndex()
+                            }
+                            return staged
                         }
                     ) {
-                        viewModel.undoPendingDelete()
+                        viewModel.undoLastStagedDeletion()
+                        clampReviewIndex()
+                    } onCommitDelete: {
+                        _ = await viewModel.commitPendingDeletions()
                         clampReviewIndex()
                     }
                     .padding()
@@ -178,6 +189,23 @@ struct CleanupHomeView: View {
                 } else {
                     await viewModel.prepareCleanupData()
                 }
+            }
+            .alert(
+                "Cleanup Action",
+                isPresented: Binding(
+                    get: { viewModel.cleanupReviewMessage != nil },
+                    set: { newValue in
+                        if !newValue {
+                            viewModel.dismissCleanupReviewMessage()
+                        }
+                    }
+                )
+            ) {
+                Button("OK") {
+                    viewModel.dismissCleanupReviewMessage()
+                }
+            } message: {
+                Text(viewModel.cleanupReviewMessage ?? "")
             }
             .sheet(item: $selectedAsset) { asset in
                 AssetEditorSheet(
@@ -656,35 +684,18 @@ private struct ScreenshotSlashView: View {
     let thumbnailStore: PhotoLibraryThumbnailStore
     @Binding var currentIndex: Int
     let isRefreshing: Bool
-    let pendingUndoAsset: MediaAsset?
+    let pendingDeletionCount: Int
+    let pendingDeletionLimit: Int
+    let pendingDeletionPreviewAsset: MediaAsset?
+    let isCommittingDeletion: Bool
     let onOpenDetail: (MediaAsset) -> Void
     let onKeep: (MediaAsset) async -> Void
-    let onDelete: (MediaAsset) async -> Void
+    let onDelete: (MediaAsset) async -> Bool
     let onUndoDelete: () -> Void
+    let onCommitDelete: () async -> Void
 
     var body: some View {
         VStack(spacing: 18) {
-            SnapuaryCard(title: "Screenshot Slash") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Left swipe deletes the screenshot from Photos. Right swipe protects it from cleanup.")
-                        .foregroundStyle(.secondary)
-
-                    if isRefreshing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Refreshing screenshots in the background.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    Text(progressLabel)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
             if let asset = currentAsset {
                 ScreenshotSlashCard(
                     asset: asset,
@@ -696,10 +707,13 @@ private struct ScreenshotSlashView: View {
                         advanceAfterAction()
                     },
                     onDelete: {
-                        await onDelete(asset)
-                        advanceAfterAction()
+                        let deleted = await onDelete(asset)
+                        if deleted {
+                            advanceAfterAction()
+                        }
                     }
                 )
+                .id(asset.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 SnapuaryCard(title: "All Clear") {
@@ -709,8 +723,35 @@ private struct ScreenshotSlashView: View {
                 Spacer()
             }
 
-            if let pendingUndoAsset {
-                UndoDeleteBar(asset: pendingUndoAsset, onUndo: onUndoDelete)
+            HStack {
+                if isRefreshing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Refreshing")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Spacer()
+
+                Text(progressLabel)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            if pendingDeletionCount > 0 {
+                PendingDeletionBar(
+                    pendingCount: pendingDeletionCount,
+                    pendingLimit: pendingDeletionLimit,
+                    previewAsset: pendingDeletionPreviewAsset,
+                    isDeleting: isCommittingDeletion,
+                    onUndo: onUndoDelete,
+                    onDeleteNow: {
+                        await onCommitDelete()
+                    }
+                )
             }
         }
         .onChange(of: assets.count) { _, newCount in
@@ -744,7 +785,7 @@ private struct ScreenshotSlashView: View {
             return "0 screenshots left to review."
         }
 
-        return "\(currentIndex + 1) / \(assets.count)"
+        return "\(currentIndex + 1) / \(assets.count) left"
     }
 
     private func advanceAfterAction() {
@@ -932,16 +973,22 @@ private struct ReviewCardFace: View {
     }
 }
 
-private struct UndoDeleteBar: View {
-    let asset: MediaAsset
+private struct PendingDeletionBar: View {
+    let pendingCount: Int
+    let pendingLimit: Int
+    let previewAsset: MediaAsset?
+    let isDeleting: Bool
     let onUndo: () -> Void
+    let onDeleteNow: () async -> Void
+
+    @State private var isSubmitting = false
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Screenshot queued for deletion")
+                Text("\(pendingCount) screenshot\(pendingCount == 1 ? "" : "s") queued")
                     .font(.subheadline.weight(.semibold))
-                Text(asset.title)
+                Text(statusLine)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -950,10 +997,42 @@ private struct UndoDeleteBar: View {
             Spacer()
 
             Button("Undo", action: onUndo)
+                .buttonStyle(.bordered)
+                .disabled(isDeleting || isSubmitting)
+
+            Button {
+                Task { await submitDeletion() }
+            } label: {
+                Text(isDeleting || isSubmitting ? "Deleting..." : "Delete \(pendingCount)")
+            }
                 .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .disabled(isDeleting || isSubmitting)
         }
         .padding(14)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var statusLine: String {
+        if pendingCount >= pendingLimit {
+            return "Queue is full. Delete or undo before adding more screenshots."
+        }
+
+        if let previewAsset {
+            return "Latest queued: \(previewAsset.title)"
+        }
+
+        return "Review more screenshots or delete this batch now."
+    }
+
+    private func submitDeletion() async {
+        guard !isSubmitting else {
+            return
+        }
+
+        isSubmitting = true
+        await onDeleteNow()
+        isSubmitting = false
     }
 }
 

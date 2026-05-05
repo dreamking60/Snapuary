@@ -43,6 +43,7 @@ final class LibraryHomeViewModel {
     private let cleanupSchedulingService: CleanupSchedulingServing
     private let browsingPageSize = 120
     private let fullLoadPageSize = 240
+    private let reviewDeletionBatchLimit = 50
 
     private(set) var assets: [MediaAsset] = []
     private var cleanupScopedAssets: [MediaAsset] = []
@@ -62,7 +63,8 @@ final class LibraryHomeViewModel {
     private(set) var isLoading = false
     private(set) var isLoadingMore = false
     private(set) var isSyncingCleanupData = false
-    private(set) var pendingUndoDelete: MediaAsset?
+    private(set) var cleanupReviewMessage: String?
+    private(set) var pendingDeletionAssets: [MediaAsset] = []
     private(set) var loadedAssetCount = 0
     private(set) var totalAssetCount = 0
     private(set) var isRunningCleanup = false
@@ -79,7 +81,6 @@ final class LibraryHomeViewModel {
     private var cachedFingerprint: PhotoLibraryFingerprint?
     private var currentOffset = 0
     private var cleanupSyncTask: Task<Void, Never>?
-    private var pendingDeleteTask: Task<Void, Never>?
 
     init(
         photoLibraryService: PhotoLibraryServing,
@@ -266,6 +267,18 @@ final class LibraryHomeViewModel {
 
     var screenshotReviewQueue: [MediaAsset] {
         cleanupScopedAssets.filter { !$0.isProtectedFromCleanup }
+    }
+
+    var pendingDeletionCount: Int {
+        pendingDeletionAssets.count
+    }
+
+    var pendingDeletionLimit: Int {
+        reviewDeletionBatchLimit
+    }
+
+    var lastPendingDeletionAsset: MediaAsset? {
+        pendingDeletionAssets.last
     }
 
     func assets(for tagEntry: TagLibraryEntry) -> [MediaAsset] {
@@ -564,10 +577,6 @@ final class LibraryHomeViewModel {
             try await photoLibraryService.deleteAssets(withLocalIdentifiers: [libraryIdentifier])
             try await metadataService.removeMetadata(for: [libraryIdentifier])
 
-            pendingDeleteTask?.cancel()
-            pendingDeleteTask = nil
-            pendingUndoDelete = nil
-
             if assets.contains(where: { $0.id == asset.id }) {
                 removeAssetFromLocalState(asset)
             } else {
@@ -578,54 +587,79 @@ final class LibraryHomeViewModel {
                 deletedCount: 1,
                 deletedAssetTitles: [asset.title]
             )
+            cleanupReviewMessage = nil
             await persistSnapshot()
             return true
         } catch {
-            authorizationErrorMessage = "Failed to delete the selected screenshot."
+            cleanupReviewMessage = "Deletion was not allowed. The screenshot was kept."
             return false
         }
     }
 
-    func stageDeleteForUndo(_ asset: MediaAsset) {
-        pendingDeleteTask?.cancel()
-        pendingUndoDelete = asset
+    @discardableResult
+    func stageAssetForDeletion(_ asset: MediaAsset) -> Bool {
+        guard pendingDeletionAssets.count < reviewDeletionBatchLimit else {
+            cleanupReviewMessage = "Delete the queued screenshots before adding more than \(reviewDeletionBatchLimit)."
+            return false
+        }
+
+        guard !pendingDeletionAssets.contains(where: { $0.id == asset.id }) else {
+            return false
+        }
+
+        cleanupReviewMessage = nil
+        pendingDeletionAssets.append(asset)
         removeAssetFromLocalState(asset)
+        return true
+    }
 
-        pendingDeleteTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(4))
-            } catch {
-                return
-            }
+    @discardableResult
+    func commitPendingDeletions() async -> Bool {
+        guard !pendingDeletionAssets.isEmpty else {
+            return false
+        }
 
-            guard let self else {
-                return
-            }
+        let stagedAssets = pendingDeletionAssets
+        let identifiers = stagedAssets.compactMap(\.libraryIdentifier)
+        guard identifiers.count == stagedAssets.count else {
+            restorePendingDeletionAssets(stagedAssets)
+            cleanupReviewMessage = "Some queued screenshots could not be deleted and were restored."
+            return false
+        }
 
-            let stagedAsset = self.pendingUndoDelete
-            guard stagedAsset?.id == asset.id else {
-                return
-            }
+        isRunningCleanup = true
+        defer { isRunningCleanup = false }
 
-            let deleted = await self.deleteAssetImmediately(asset)
-            if deleted {
-                await MainActor.run {
-                    self.pendingUndoDelete = nil
-                    self.pendingDeleteTask = nil
-                }
-            }
+        do {
+            try await photoLibraryService.deleteAssets(withLocalIdentifiers: identifiers)
+            try await metadataService.removeMetadata(for: identifiers)
+
+            pendingDeletionAssets.removeAll()
+            lastCleanupResult = CleanupExecutionResult(
+                deletedCount: stagedAssets.count,
+                deletedAssetTitles: stagedAssets.map(\.title)
+            )
+            cleanupReviewMessage = nil
+            await persistSnapshot()
+            return true
+        } catch {
+            restorePendingDeletionAssets(stagedAssets)
+            cleanupReviewMessage = "Deletion was not allowed. The queued screenshots were kept."
+            return false
         }
     }
 
-    func undoPendingDelete() {
-        guard let pendingUndoDelete else {
+    func undoLastStagedDeletion() {
+        guard let pendingDeletionAsset = pendingDeletionAssets.popLast() else {
             return
         }
 
-        pendingDeleteTask?.cancel()
-        pendingDeleteTask = nil
-        insertAssetBackIntoLocalState(pendingUndoDelete)
-        self.pendingUndoDelete = nil
+        insertAssetBackIntoLocalState(pendingDeletionAsset)
+        cleanupReviewMessage = nil
+    }
+
+    func dismissCleanupReviewMessage() {
+        cleanupReviewMessage = nil
     }
 
     func dismissCleanupPrompt() {
@@ -918,6 +952,16 @@ final class LibraryHomeViewModel {
         totalAssetCount += 1
         currentOffset = max(currentOffset, assets.count)
         refreshCleanupStateFromScopedAssets()
+    }
+
+    private func restorePendingDeletionAssets(_ stagedAssets: [MediaAsset]) {
+        pendingDeletionAssets.removeAll()
+
+        for asset in stagedAssets.sorted(by: { $0.createdAt < $1.createdAt }) {
+            if !assets.contains(where: { $0.id == asset.id }) {
+                insertAssetBackIntoLocalState(asset)
+            }
+        }
     }
 
     private func startCleanupSyncIfNeeded() {
