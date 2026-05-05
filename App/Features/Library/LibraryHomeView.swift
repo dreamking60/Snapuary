@@ -128,6 +128,7 @@ struct LibraryHomeView: View {
 struct CleanupHomeView: View {
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
+    @State private var previewAsset: MediaAsset?
     @State private var reviewIndex = 0
 
     init(viewModel: LibraryHomeViewModel) {
@@ -149,9 +150,10 @@ struct CleanupHomeView: View {
                     )
                 } else {
                     ScreenshotSlashView(
-                        assets: viewModel.screenshotReviewQueue,
+                        assets: viewModel.cleanupReviewQueue,
                         thumbnailStore: viewModel.thumbnailStore,
                         currentIndex: $reviewIndex,
+                        reviewMode: $viewModel.cleanupReviewMode,
                         isRefreshing: viewModel.isSyncingCleanupData,
                         pendingDeletionCount: viewModel.pendingDeletionCount,
                         pendingDeletionLimit: viewModel.pendingDeletionLimit,
@@ -159,6 +161,9 @@ struct CleanupHomeView: View {
                         isCommittingDeletion: viewModel.isRunningCleanup,
                         onOpenDetail: { asset in
                             selectedAsset = asset
+                        },
+                        onPreview: { asset in
+                            previewAsset = asset
                         },
                         onKeep: { asset in
                             await viewModel.protectFromCleanup(asset)
@@ -181,7 +186,7 @@ struct CleanupHomeView: View {
                     .padding()
                 }
             }
-            .navigationTitle("Cleanup")
+            .toolbar(.hidden, for: .navigationBar)
             .task {
                 if viewModel.authorizationStatus == .notDetermined {
                     await viewModel.requestPhotoLibraryAccessForBrowsing()
@@ -232,6 +237,9 @@ struct CleanupHomeView: View {
                 )
                 .presentationDetents([.large])
             }
+            .fullScreenCover(item: $previewAsset) { asset in
+                PhotoPreviewSheet(asset: asset, thumbnailStore: viewModel.thumbnailStore)
+            }
         }
     }
 
@@ -244,7 +252,7 @@ struct CleanupHomeView: View {
     }
 
     private func clampReviewIndex() {
-        let count = viewModel.screenshotReviewQueue.count
+        let count = viewModel.cleanupReviewQueue.count
         if count == 0 {
             reviewIndex = 0
         } else {
@@ -683,12 +691,14 @@ private struct ScreenshotSlashView: View {
     let assets: [MediaAsset]
     let thumbnailStore: PhotoLibraryThumbnailStore
     @Binding var currentIndex: Int
+    @Binding var reviewMode: CleanupReviewMode
     let isRefreshing: Bool
     let pendingDeletionCount: Int
     let pendingDeletionLimit: Int
     let pendingDeletionPreviewAsset: MediaAsset?
     let isCommittingDeletion: Bool
     let onOpenDetail: (MediaAsset) -> Void
+    let onPreview: (MediaAsset) -> Void
     let onKeep: (MediaAsset) async -> Void
     let onDelete: (MediaAsset) async -> Bool
     let onUndoDelete: () -> Void
@@ -696,11 +706,15 @@ private struct ScreenshotSlashView: View {
 
     var body: some View {
         VStack(spacing: 18) {
+            cleanupHeader
+
             if let asset = currentAsset {
                 ScreenshotSlashCard(
                     asset: asset,
                     nextAsset: nextAsset,
                     thumbnailStore: thumbnailStore,
+                    progressLabel: progressLabel,
+                    onPreview: { onPreview(asset) },
                     onOpenDetail: { onOpenDetail(asset) },
                     onKeep: {
                         await onKeep(asset)
@@ -717,28 +731,10 @@ private struct ScreenshotSlashView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 SnapuaryCard(title: "All Clear") {
-                    Text("No screenshots are waiting for review.")
+                    Text(emptyStateMessage)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-            }
-
-            HStack {
-                if isRefreshing {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text("Refreshing")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                Text(progressLabel)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
 
             if pendingDeletionCount > 0 {
@@ -747,6 +743,7 @@ private struct ScreenshotSlashView: View {
                     pendingLimit: pendingDeletionLimit,
                     previewAsset: pendingDeletionPreviewAsset,
                     isDeleting: isCommittingDeletion,
+                    itemLabel: reviewMode == .screenshots ? "screenshot" : "photo",
                     onUndo: onUndoDelete,
                     onDeleteNow: {
                         await onCommitDelete()
@@ -760,6 +757,9 @@ private struct ScreenshotSlashView: View {
             } else {
                 currentIndex = min(currentIndex, newCount - 1)
             }
+        }
+        .onChange(of: reviewMode) { _, _ in
+            currentIndex = 0
         }
     }
 
@@ -782,10 +782,67 @@ private struct ScreenshotSlashView: View {
 
     private var progressLabel: String {
         guard !assets.isEmpty else {
-            return "0 screenshots left to review."
+            return "0 left"
         }
 
         return "\(currentIndex + 1) / \(assets.count) left"
+    }
+
+    private var emptyStateMessage: String {
+        switch reviewMode {
+        case .screenshots:
+            "No screenshots are waiting for review."
+        case .allPhotos:
+            "No photos are waiting for review."
+        }
+    }
+
+    private var cleanupHeader: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            cleanupModePicker
+
+            Text("Tap the photo to preview the original.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Refreshing library")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var cleanupModePicker: some View {
+        HStack(spacing: 8) {
+            ForEach(CleanupReviewMode.allCases) { mode in
+                Button {
+                    reviewMode = mode
+                } label: {
+                    Text(mode.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(reviewMode == mode ? Color.white : Color.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            Group {
+                                if reviewMode == mode {
+                                    Capsule().fill(Color.accentColor)
+                                } else {
+                                    Capsule().fill(Color(.secondarySystemBackground))
+                                }
+                            }
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .background(.thinMaterial, in: Capsule())
     }
 
     private func advanceAfterAction() {
@@ -801,6 +858,8 @@ private struct ScreenshotSlashCard: View {
     let asset: MediaAsset
     let nextAsset: MediaAsset?
     let thumbnailStore: PhotoLibraryThumbnailStore
+    let progressLabel: String
+    let onPreview: () -> Void
     let onOpenDetail: () -> Void
     let onKeep: () async -> Void
     let onDelete: () async -> Void
@@ -809,7 +868,7 @@ private struct ScreenshotSlashCard: View {
     @State private var isActing = false
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 18) {
             ZStack {
                 if let nextAsset {
                     ReviewCardFace(
@@ -826,13 +885,25 @@ private struct ScreenshotSlashCard: View {
                     thumbnailStore: thumbnailStore,
                     overlayOpacity: 0
                 )
+                .onTapGesture(perform: onPreview)
                 .overlay(alignment: .topLeading) {
-                    slashIndicator
-                        .padding(18)
+                    if dragOffset.width > 24 {
+                        slashIndicator
+                            .padding(.top, 64)
+                            .padding(.leading, 18)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if dragOffset.width < -24 {
+                        slashIndicator
+                            .padding(.top, 64)
+                            .padding(.trailing, 18)
+                    }
                 }
             }
             .offset(x: dragOffset.width, y: 0)
             .rotationEffect(.degrees(Double(dragOffset.width / 18)))
+            .shadow(color: Color.black.opacity(0.14), radius: 30, y: 22)
             .gesture(
                 DragGesture(minimumDistance: 12)
                     .onChanged { value in
@@ -859,56 +930,96 @@ private struct ScreenshotSlashCard: View {
                     }
             )
 
-            HStack(spacing: 12) {
-                Button {
+            HStack(spacing: 16) {
+                ActionOrbButton(
+                    title: "Queue",
+                    systemImage: "trash.fill",
+                    tint: .red,
+                    material: .regularMaterial,
+                    isEnabled: !isActing
+                ) {
                     Task { await performDelete() }
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .disabled(isActing)
 
-                Button {
-                    onOpenDetail()
-                } label: {
-                    Label("Details", systemImage: "slider.horizontal.3")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-                .disabled(isActing)
+                ActionOrbButton(
+                    title: "Inspect",
+                    systemImage: "slider.horizontal.3",
+                    tint: .primary,
+                    material: .ultraThinMaterial,
+                    isEnabled: !isActing,
+                    action: onOpenDetail
+                )
 
-                Button {
+                ActionOrbButton(
+                    title: "Keep",
+                    systemImage: "bookmark.fill",
+                    tint: .green,
+                    material: .regularMaterial,
+                    isEnabled: !isActing
+                ) {
                     Task { await performKeep() }
-                } label: {
-                    Label("Keep", systemImage: "bookmark.fill")
-                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .disabled(isActing)
             }
+            .padding(.horizontal, 8)
         }
     }
 
     @ViewBuilder
     private var slashIndicator: some View {
         if dragOffset.width > 24 {
-            Text("KEEP")
-                .font(.headline.weight(.bold))
-                .foregroundStyle(.green)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.thinMaterial, in: Capsule())
+            swipeStamp(
+                title: "KEEP",
+                systemImage: "bookmark.fill",
+                tint: .green,
+                rotation: -8
+            )
         } else if dragOffset.width < -24 {
-            Text("DELETE")
-                .font(.headline.weight(.bold))
-                .foregroundStyle(.red)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.thinMaterial, in: Capsule())
+            swipeStamp(
+                title: "DELETE",
+                systemImage: "trash.fill",
+                tint: .red,
+                rotation: 8
+            )
         }
+    }
+
+    private func swipeStamp(
+        title: String,
+        systemImage: String,
+        tint: Color,
+        rotation: Double
+    ) -> some View {
+        let emphasis = min(abs(dragOffset.width) / 140, 1)
+
+        return Label(title, systemImage: systemImage)
+            .font(.caption.weight(.black))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(tint.opacity(0.5), lineWidth: 1.5)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        tint.opacity(0.16),
+                                        Color.white.opacity(0.02)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    )
+            )
+            .shadow(color: tint.opacity(0.18), radius: 14, y: 8)
+            .rotationEffect(.degrees(rotation))
+            .scaleEffect(0.92 + (0.08 * emphasis))
     }
 
     private func performKeep() async {
@@ -978,6 +1089,7 @@ private struct PendingDeletionBar: View {
     let pendingLimit: Int
     let previewAsset: MediaAsset?
     let isDeleting: Bool
+    let itemLabel: String
     let onUndo: () -> Void
     let onDeleteNow: () async -> Void
 
@@ -986,7 +1098,7 @@ private struct PendingDeletionBar: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(pendingCount) screenshot\(pendingCount == 1 ? "" : "s") queued")
+                Text("\(pendingCount) \(itemLabel)\(pendingCount == 1 ? "" : "s") queued")
                     .font(.subheadline.weight(.semibold))
                 Text(statusLine)
                     .font(.footnote)
@@ -1033,6 +1145,39 @@ private struct PendingDeletionBar: View {
         isSubmitting = true
         await onDeleteNow()
         isSubmitting = false
+    }
+}
+
+private struct ActionOrbButton: View {
+    let title: String
+    let systemImage: String
+    let tint: Color
+    let material: Material
+    let isEnabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 58, height: 58)
+                    .background(material, in: Circle())
+                    .overlay {
+                        Circle()
+                            .strokeBorder(tint.opacity(0.18), lineWidth: 1)
+                    }
+
+                Text(title)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.45)
+        .disabled(!isEnabled)
     }
 }
 
@@ -1382,6 +1527,118 @@ private struct PhotoThumbnailView: View {
             contentMode: contentMode == .fill ? .aspectFill : .aspectFit
         ) { renderedImage in
             image = renderedImage
+        }
+    }
+}
+
+private struct PhotoPreviewSheet: View {
+    let asset: MediaAsset
+    let thumbnailStore: PhotoLibraryThumbnailStore
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var image: UIImage?
+    @State private var requestID: PHImageRequestID?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let image {
+                ZoomableImageScrollView(image: image)
+                    .ignoresSafeArea()
+            } else {
+                ProgressView()
+                    .tint(.white)
+            }
+
+            VStack {
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(Color.black.opacity(0.45), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+                }
+
+                Spacer()
+
+                Text(asset.title)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.4), in: Capsule())
+            }
+            .padding(20)
+        }
+        .task(id: asset.libraryIdentifier) {
+            await loadPreviewIfNeeded()
+        }
+        .onDisappear {
+            thumbnailStore.cancelRequest(requestID)
+        }
+    }
+
+    @MainActor
+    private func loadPreviewIfNeeded() async {
+        guard image == nil,
+              let libraryIdentifier = asset.libraryIdentifier else {
+            return
+        }
+
+        let screenBounds = UIScreen.main.bounds
+        let scale = UIScreen.main.scale
+        let targetSize = CGSize(width: screenBounds.width * scale, height: screenBounds.height * scale)
+        requestID = thumbnailStore.requestPreviewImage(for: libraryIdentifier, targetSize: targetSize) { renderedImage in
+            image = renderedImage
+        }
+    }
+}
+
+private struct ZoomableImageScrollView: UIViewRepresentable {
+    let image: UIImage
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scrollView = UIScrollView()
+        scrollView.delegate = context.coordinator
+        scrollView.minimumZoomScale = 1
+        scrollView.maximumZoomScale = 4
+        scrollView.bouncesZoom = true
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.showsHorizontalScrollIndicator = false
+        scrollView.backgroundColor = .black
+
+        let imageView = UIImageView(image: image)
+        imageView.contentMode = .scaleAspectFit
+        imageView.frame = scrollView.bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        scrollView.addSubview(imageView)
+        context.coordinator.imageView = imageView
+
+        return scrollView
+    }
+
+    func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        context.coordinator.imageView?.image = image
+        context.coordinator.imageView?.frame = scrollView.bounds
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        weak var imageView: UIImageView?
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? {
+            imageView
         }
     }
 }

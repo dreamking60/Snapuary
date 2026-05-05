@@ -20,6 +20,22 @@ enum LibraryCollection: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
+enum CleanupReviewMode: String, CaseIterable, Hashable, Identifiable {
+    case screenshots
+    case allPhotos
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .screenshots:
+            "Screenshots"
+        case .allPhotos:
+            "All Photos"
+        }
+    }
+}
+
 struct TagLibraryEntry: Identifiable, Hashable {
     let id: String
     let name: String
@@ -44,6 +60,7 @@ final class LibraryHomeViewModel {
     private let browsingPageSize = 120
     private let fullLoadPageSize = 240
     private let reviewDeletionBatchLimit = 50
+    private let cleanupDeletionCountKey = "cleanupDeletionCount"
 
     private(set) var assets: [MediaAsset] = []
     private var cleanupScopedAssets: [MediaAsset] = []
@@ -60,6 +77,7 @@ final class LibraryHomeViewModel {
     private(set) var nextCleanupReminder: CleanupReminderSchedule?
     private(set) var authorizationStatus: PhotoLibraryAuthorizationStatus
     private(set) var authorizationErrorMessage: String?
+    private(set) var totalCleanupDeletedCount: Int
     private(set) var isLoading = false
     private(set) var isLoadingMore = false
     private(set) var isSyncingCleanupData = false
@@ -73,6 +91,7 @@ final class LibraryHomeViewModel {
     var searchText = ""
     var selectedTag: MediaTag?
     var selectedCollection: LibraryCollection = .all
+    var cleanupReviewMode: CleanupReviewMode = .screenshots
     private var hasPromptedForCleanupThisSession = false
     private var hasLoadedCompleteLibrary = false
     private var hasHydratedCache = false
@@ -97,6 +116,7 @@ final class LibraryHomeViewModel {
         self.expirationService = expirationService
         self.cleanupSchedulingService = cleanupSchedulingService
         self.authorizationStatus = photoLibraryService.authorizationStatus()
+        self.totalCleanupDeletedCount = UserDefaults.standard.integer(forKey: cleanupDeletionCountKey)
     }
 
     var loadProgress: Double {
@@ -265,8 +285,13 @@ final class LibraryHomeViewModel {
         screenshotAssets.filter { !$0.tags.isEmpty }
     }
 
-    var screenshotReviewQueue: [MediaAsset] {
-        cleanupScopedAssets.filter { !$0.isProtectedFromCleanup }
+    var cleanupReviewQueue: [MediaAsset] {
+        switch cleanupReviewMode {
+        case .screenshots:
+            cleanupScopedAssets.filter { !$0.isProtectedFromCleanup }
+        case .allPhotos:
+            assets.filter { !$0.isProtectedFromCleanup }
+        }
     }
 
     var pendingDeletionCount: Int {
@@ -559,6 +584,7 @@ final class LibraryHomeViewModel {
                 deletedCount: candidates.count,
                 deletedAssetTitles: candidates.map(\.title)
             )
+            recordCleanupDeletion(count: candidates.count)
             await reloadAfterLibraryMutation(scope: .complete)
             if cleanupReminderStatus.canSchedule {
                 await scheduleNextCleanupReminder()
@@ -587,6 +613,7 @@ final class LibraryHomeViewModel {
                 deletedCount: 1,
                 deletedAssetTitles: [asset.title]
             )
+            recordCleanupDeletion(count: 1)
             cleanupReviewMessage = nil
             await persistSnapshot()
             return true
@@ -639,6 +666,7 @@ final class LibraryHomeViewModel {
                 deletedCount: stagedAssets.count,
                 deletedAssetTitles: stagedAssets.map(\.title)
             )
+            recordCleanupDeletion(count: stagedAssets.count)
             cleanupReviewMessage = nil
             await persistSnapshot()
             return true
@@ -962,6 +990,15 @@ final class LibraryHomeViewModel {
                 insertAssetBackIntoLocalState(asset)
             }
         }
+    }
+
+    private func recordCleanupDeletion(count: Int) {
+        guard count > 0 else {
+            return
+        }
+
+        totalCleanupDeletedCount += count
+        UserDefaults.standard.set(totalCleanupDeletedCount, forKey: cleanupDeletionCountKey)
     }
 
     private func startCleanupSyncIfNeeded() {

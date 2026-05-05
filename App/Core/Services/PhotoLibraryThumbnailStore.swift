@@ -58,6 +58,32 @@ final class PhotoLibraryThumbnailStore {
         }
     }
 
+    @discardableResult
+    func requestPreviewImage(
+        for localIdentifier: String,
+        targetSize: CGSize,
+        completion: @escaping (UIImage?) -> Void
+    ) -> PHImageRequestID? {
+        guard let asset = asset(for: localIdentifier) else {
+            completion(nil)
+            return nil
+        }
+
+        let options = PHImageRequestOptions()
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .exact
+        options.isNetworkAccessAllowed = true
+
+        return imageManager.requestImage(
+            for: asset,
+            targetSize: targetSize,
+            contentMode: .aspectFit,
+            options: options
+        ) { image, _ in
+            completion(image)
+        }
+    }
+
     func cancelRequest(_ requestID: PHImageRequestID?) {
         guard let requestID else {
             return
