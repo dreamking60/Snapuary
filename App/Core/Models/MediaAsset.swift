@@ -38,11 +38,11 @@ enum MediaAssetKind: String, Codable, Hashable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .systemScreenshot:
-            "System Screenshot"
+            L10n.text("asset.kind.system_screenshot", fallback: "System Screenshot")
         case .importedScreenshotLike:
-            "Imported Screenshot"
+            L10n.text("asset.kind.imported_screenshot", fallback: "Imported Screenshot")
         case .photo:
-            "Photo"
+            L10n.text("asset.kind.photo", fallback: "Photo")
         }
     }
 }
@@ -144,11 +144,11 @@ struct ScreenshotRetentionRule: Codable, Hashable {
         var displayName: String {
             switch self {
             case .oneDay:
-                "1 Day"
+                L10n.text("rule.preset.one_day", fallback: "1 Day")
             case .oneWeek:
-                "1 Week"
+                L10n.text("rule.preset.one_week", fallback: "1 Week")
             case .oneMonth:
-                "1 Month"
+                L10n.text("rule.preset.one_month", fallback: "1 Month")
             }
         }
 
@@ -194,11 +194,19 @@ struct ScreenshotRetentionRule: Codable, Hashable {
     var displayName: String {
         switch mode {
         case .manualOnly:
-            "Manual Only"
+            return L10n.text("rule.mode.manual_only", fallback: "Manual Only")
         case .preset(let preset):
-            preset.displayName
+            return preset.displayName
         case .customMinutes(let minutes):
-            "\(minutes) Minute\(minutes == 1 ? "" : "s")"
+            if minutes == 1 {
+                return L10n.text("rule.mode.custom_minute.singular", fallback: "1 Minute")
+            }
+
+            return L10n.text(
+                "rule.mode.custom_minute.plural",
+                fallback: "%lld Minutes",
+                minutes
+            )
         }
     }
 }

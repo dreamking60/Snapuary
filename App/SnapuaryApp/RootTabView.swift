@@ -11,19 +11,19 @@ struct RootTabView: View {
         TabView(selection: $viewModel.selectedTab) {
             LibraryHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label("Library", systemImage: "photo.stack")
+                    Label(L10n.text("tab.library", fallback: "Library"), systemImage: "photo.stack")
                 }
                 .tag(RootTab.library)
 
             TagHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label("Tags", systemImage: "folder")
+                    Label(L10n.text("tab.tags", fallback: "Tags"), systemImage: "folder")
                 }
                 .tag(RootTab.tags)
 
             CleanupHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label("Cleanup", systemImage: "trash")
+                    Label(L10n.text("tab.cleanup", fallback: "Cleanup"), systemImage: "trash")
                 }
                 .tag(RootTab.cleanup)
         }

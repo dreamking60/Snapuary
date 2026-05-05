@@ -4,6 +4,7 @@ import SwiftUI
 struct LibraryHomeView: View {
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
+    @State private var isShowingProfileSheet = false
 
     private let gridColumns = [
         GridItem(.flexible(), spacing: 3),
@@ -56,9 +57,20 @@ struct LibraryHomeView: View {
                     .padding(.bottom, 24)
                 }
             }
-            .navigationTitle("Library")
+            .navigationTitle(L10n.text("library.title", fallback: "Library"))
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $viewModel.searchText, prompt: "Search title or tag")
+            .searchable(text: $viewModel.searchText, prompt: L10n.text("library.search_prompt", fallback: "Search title or tag"))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        isShowingProfileSheet = true
+                    } label: {
+                        Image(systemName: "person.crop.circle")
+                            .font(.title3)
+                    }
+                    .accessibilityLabel(L10n.text("settings.title", fallback: "Profile"))
+                }
+            }
             .task {
                 if viewModel.authorizationStatus == .notDetermined {
                     await viewModel.requestPhotoLibraryAccessForBrowsing()
@@ -77,16 +89,19 @@ struct LibraryHomeView: View {
                     }
                 )
             ) {
-                Button("Later", role: .cancel) {
+                Button(L10n.text("common.later", fallback: "Later"), role: .cancel) {
                     viewModel.dismissCleanupPrompt()
                 }
-                Button("Clean Now", role: .destructive) {
+                Button(L10n.text("cleanup.clean_now", fallback: "Clean Now"), role: .destructive) {
                     Task {
                         await viewModel.runCleanupNow()
                     }
                 }
             } message: {
                 Text(viewModel.cleanupPromptMessage)
+            }
+            .sheet(isPresented: $isShowingProfileSheet) {
+                AppProfileSheet(photoAuthorizationStatus: viewModel.authorizationStatus)
             }
             .sheet(item: $selectedAsset) { asset in
                 AssetEditorSheet(
@@ -188,6 +203,9 @@ struct CleanupHomeView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .task {
+                if viewModel.cleanupReviewMode != AppContainer.live.settingsStore.preferredCleanupReviewMode {
+                    viewModel.cleanupReviewMode = AppContainer.live.settingsStore.preferredCleanupReviewMode
+                }
                 if viewModel.authorizationStatus == .notDetermined {
                     await viewModel.requestPhotoLibraryAccessForBrowsing()
                     await viewModel.prepareCleanupData()
@@ -196,7 +214,7 @@ struct CleanupHomeView: View {
                 }
             }
             .alert(
-                "Cleanup Action",
+                L10n.text("cleanup.action_title", fallback: "Cleanup Action"),
                 isPresented: Binding(
                     get: { viewModel.cleanupReviewMessage != nil },
                     set: { newValue in
@@ -206,7 +224,7 @@ struct CleanupHomeView: View {
                     }
                 )
             ) {
-                Button("OK") {
+                Button(L10n.text("common.ok", fallback: "OK")) {
                     viewModel.dismissCleanupReviewMessage()
                 }
             } message: {
@@ -282,17 +300,17 @@ struct TagHomeView: View {
                 } else {
                     List {
                         Section {
-                            Text("Manage your library by tag, like folders. Open a tag to see every photo inside it.")
+                            Text(L10n.text("tags.intro", fallback: "Manage your library by tag, like folders. Open a tag to see every photo inside it."))
                                 .foregroundStyle(.secondary)
                         }
 
                         if viewModel.tagLibrary.isEmpty {
-                            Section("Tags") {
-                                Text("No tags yet. Open a photo in Library and add tags first.")
+                            Section(L10n.text("tab.tags", fallback: "Tags")) {
+                                Text(L10n.text("tags.empty", fallback: "No tags yet. Open a photo in Library and add tags first."))
                                     .foregroundStyle(.secondary)
                             }
                         } else {
-                            Section("Tags") {
+                            Section(L10n.text("tab.tags", fallback: "Tags")) {
                                 ForEach(viewModel.tagLibrary) { entry in
                                     let tagAssets = viewModel.assets(for: entry)
                                     NavigationLink {
@@ -307,7 +325,7 @@ struct TagHomeView: View {
                     .listStyle(.insetGrouped)
                 }
             }
-            .navigationTitle("Tags")
+            .navigationTitle(L10n.text("tab.tags", fallback: "Tags"))
             .task {
                 if viewModel.authorizationStatus == .notDetermined {
                     await viewModel.requestPhotoLibraryAccess()
@@ -376,57 +394,57 @@ private struct TagDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu("Manage") {
-                    Button("Rename") {
+                Menu(L10n.text("common.manage", fallback: "Manage")) {
+                    Button(L10n.text("common.rename", fallback: "Rename")) {
                         draftTagName = tagEntry.name
                         isShowingRenamePrompt = true
                     }
 
-                    Button("Merge Into...") {
+                    Button(L10n.text("tags.merge_into", fallback: "Merge Into...")) {
                         mergeTargetID = mergeTargets.first?.id ?? ""
                         isShowingMergePrompt = true
                     }
                     .disabled(mergeTargets.isEmpty)
 
-                    Button("Delete Tag", role: .destructive) {
+                    Button(L10n.text("tags.delete_tag", fallback: "Delete Tag"), role: .destructive) {
                         isShowingDeleteConfirmation = true
                     }
                 }
             }
         }
-        .alert("Rename Tag", isPresented: $isShowingRenamePrompt) {
-            TextField("Tag name", text: $draftTagName)
+        .alert(L10n.text("tags.rename_title", fallback: "Rename Tag"), isPresented: $isShowingRenamePrompt) {
+            TextField(L10n.text("tags.tag_name", fallback: "Tag name"), text: $draftTagName)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            Button("Cancel", role: .cancel) {}
-            Button("Save") {
+            Button(L10n.text("common.cancel", fallback: "Cancel"), role: .cancel) {}
+            Button(L10n.text("common.save", fallback: "Save")) {
                 Task {
                     await viewModel.renameTag(tagEntry, to: draftTagName)
                     await viewModel.load()
                 }
             }
         } message: {
-            Text("Update this tag across every photo that uses it.")
+            Text(L10n.text("tags.rename_message", fallback: "Update this tag across every photo that uses it."))
         }
-        .alert("Delete Tag?", isPresented: $isShowingDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) {
+        .alert(L10n.text("tags.delete_confirm_title", fallback: "Delete Tag?"), isPresented: $isShowingDeleteConfirmation) {
+            Button(L10n.text("common.cancel", fallback: "Cancel"), role: .cancel) {}
+            Button(L10n.text("common.delete", fallback: "Delete"), role: .destructive) {
                 Task {
                     await viewModel.deleteTag(tagEntry)
                     await viewModel.load()
                 }
             }
         } message: {
-            Text("This removes the tag from every photo that currently uses it.")
+            Text(L10n.text("tags.delete_confirm_message", fallback: "This removes the tag from every photo that currently uses it."))
         }
-        .alert("Merge Tag", isPresented: $isShowingMergePrompt) {
-            Picker("Merge into", selection: $mergeTargetID) {
+        .alert(L10n.text("tags.merge_title", fallback: "Merge Tag"), isPresented: $isShowingMergePrompt) {
+            Picker(L10n.text("tags.merge_picker", fallback: "Merge into"), selection: $mergeTargetID) {
                 ForEach(mergeTargets) { entry in
                     Text(entry.name).tag(entry.id)
                 }
             }
-            Button("Cancel", role: .cancel) {}
-            Button("Merge") {
+            Button(L10n.text("common.cancel", fallback: "Cancel"), role: .cancel) {}
+            Button(L10n.text("common.merge", fallback: "Merge")) {
                 guard let destination = mergeTargets.first(where: { $0.id == mergeTargetID }) else {
                     return
                 }
@@ -436,7 +454,7 @@ private struct TagDetailView: View {
                 }
             }
         } message: {
-            Text("Every photo using \(tagEntry.name) will be reassigned to the selected tag.")
+            Text(L10n.text("tags.merge_message", fallback: "Every photo using %@ will be reassigned to the selected tag.", tagEntry.name))
         }
         .sheet(item: $selectedAsset) { asset in
             AssetEditorSheet(
@@ -489,12 +507,12 @@ private struct LibraryAuthorizationView: View {
 
     var body: some View {
         ScrollView {
-            SnapuaryCard(title: "Photo Access") {
+            SnapuaryCard(title: L10n.text("photo_access.title", fallback: "Photo Access")) {
                 Text(message)
                     .foregroundStyle(.secondary)
 
                 if authorizationStatus == .notDetermined {
-                    Button("Allow Photo Access") {
+                    Button(L10n.text("photo_access.allow_button", fallback: "Allow Photo Access")) {
                         Task {
                             await onRequestAccess()
                         }
@@ -567,15 +585,15 @@ private struct LibraryHeader: View {
     let viewModel: LibraryHomeViewModel
 
     var body: some View {
-        SnapuaryCard(title: "Browse") {
+        SnapuaryCard(title: L10n.text("library.browse_title", fallback: "Browse")) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Tap any photo to tag it, mark it as a screenshot, protect it, or set cleanup rules.")
+                Text(L10n.text("library.browse_body", fallback: "Tap any photo to tag it, mark it as a screenshot, protect it, or set cleanup rules."))
                     .foregroundStyle(.secondary)
 
                 HStack(spacing: 12) {
-                    PhotoCountBadge(title: "All", count: viewModel.filteredAssets.count)
-                    PhotoCountBadge(title: "Screenshots", count: viewModel.screenshotAssets.count)
-                    PhotoCountBadge(title: "Photos", count: viewModel.nonScreenshotAssets.count)
+                    PhotoCountBadge(title: L10n.text("library.collection.all", fallback: "All"), count: viewModel.filteredAssets.count)
+                    PhotoCountBadge(title: L10n.text("library.collection.screenshots", fallback: "Screenshots"), count: viewModel.screenshotAssets.count)
+                    PhotoCountBadge(title: L10n.text("library.collection.photos", fallback: "Photos"), count: viewModel.nonScreenshotAssets.count)
                 }
             }
         }
@@ -587,7 +605,7 @@ private struct LibraryFilterStrip: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker("Collection", selection: $viewModel.selectedCollection) {
+            Picker(L10n.text("library.collection_picker", fallback: "Collection"), selection: $viewModel.selectedCollection) {
                 ForEach(LibraryCollection.allCases) { collection in
                     Text(collection.title).tag(collection)
                 }
@@ -597,7 +615,7 @@ private struct LibraryFilterStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     FilterChip(
-                        title: "All Tags",
+                        title: L10n.text("tags.all_tags", fallback: "All Tags"),
                         isSelected: viewModel.selectedTag == nil
                     ) {
                         viewModel.selectedTag = nil
@@ -615,7 +633,7 @@ private struct LibraryFilterStrip: View {
             }
 
             if !viewModel.searchText.isEmpty || viewModel.selectedTag != nil {
-                Button("Clear Filters") {
+                Button(L10n.text("common.clear_filters", fallback: "Clear Filters")) {
                     viewModel.clearFilters()
                 }
                 .font(.footnote)
@@ -638,7 +656,7 @@ private struct LibraryGrid: View {
 
     var body: some View {
         if assets.isEmpty, isLoading {
-            SnapuaryCard(title: "Loading Library") {
+            SnapuaryCard(title: L10n.text("library.loading_title", fallback: "Loading Library")) {
                 VStack(alignment: .leading, spacing: 10) {
                     ProgressView(value: progress, total: 1)
                     Text(progressLabel)
@@ -646,8 +664,8 @@ private struct LibraryGrid: View {
                 }
             }
         } else if assets.isEmpty {
-            SnapuaryCard(title: "No Results") {
-                Text("No photos match the current collection, search, or tag filter.")
+            SnapuaryCard(title: L10n.text("library.no_results_title", fallback: "No Results")) {
+                Text(L10n.text("library.no_results_body", fallback: "No photos match the current collection, search, or tag filter."))
                     .foregroundStyle(.secondary)
             }
         } else {
@@ -676,14 +694,20 @@ private struct LibraryGrid: View {
     private var progressLabel: String {
         if totalAssetCount > 0 {
             if loadedAssetCount >= totalAssetCount {
-                return "Loaded all \(totalAssetCount) photos."
+                return L10n.text("library.loaded_all", fallback: "Loaded all %lld photos.", totalAssetCount)
             }
 
             let percentage = Int((progress * 100).rounded())
-            return "Loaded \(loadedAssetCount) of \(totalAssetCount) photos (\(percentage)%)."
+            return L10n.text(
+                "library.loaded_progress",
+                fallback: "Loaded %lld of %lld photos (%d%%).",
+                loadedAssetCount,
+                totalAssetCount,
+                percentage
+            )
         }
 
-        return "Scanning your photo library and showing photos as they are discovered."
+        return L10n.text("library.scanning", fallback: "Scanning your photo library and showing photos as they are discovered.")
     }
 }
 
@@ -730,7 +754,7 @@ private struct ScreenshotSlashView: View {
                 .id(asset.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                SnapuaryCard(title: "All Clear") {
+                SnapuaryCard(title: L10n.text("cleanup.all_clear_title", fallback: "All Clear")) {
                     Text(emptyStateMessage)
                         .foregroundStyle(.secondary)
                 }
@@ -743,7 +767,7 @@ private struct ScreenshotSlashView: View {
                     pendingLimit: pendingDeletionLimit,
                     previewAsset: pendingDeletionPreviewAsset,
                     isDeleting: isCommittingDeletion,
-                    itemLabel: reviewMode == .screenshots ? "screenshot" : "photo",
+                    itemLabel: reviewMode == .screenshots ? L10n.text("cleanup.item.screenshot", fallback: "screenshot") : L10n.text("cleanup.item.photo", fallback: "photo"),
                     onUndo: onUndoDelete,
                     onDeleteNow: {
                         await onCommitDelete()
@@ -782,18 +806,23 @@ private struct ScreenshotSlashView: View {
 
     private var progressLabel: String {
         guard !assets.isEmpty else {
-            return "0 left"
+            return L10n.text("cleanup.zero_left", fallback: "0 left")
         }
 
-        return "\(currentIndex + 1) / \(assets.count) left"
+        return L10n.text(
+            "cleanup.progress_left",
+            fallback: "%lld / %lld left",
+            currentIndex + 1,
+            assets.count
+        )
     }
 
     private var emptyStateMessage: String {
         switch reviewMode {
         case .screenshots:
-            "No screenshots are waiting for review."
+            L10n.text("cleanup.empty_screenshots", fallback: "No screenshots are waiting for review.")
         case .allPhotos:
-            "No photos are waiting for review."
+            L10n.text("cleanup.empty_photos", fallback: "No photos are waiting for review.")
         }
     }
 
@@ -801,7 +830,7 @@ private struct ScreenshotSlashView: View {
         VStack(alignment: .leading, spacing: 14) {
             cleanupModePicker
 
-            Text("Tap the photo to preview the original.")
+            Text(L10n.text("cleanup.preview_hint", fallback: "Tap the photo to preview the original."))
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -809,7 +838,7 @@ private struct ScreenshotSlashView: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text("Refreshing library")
+                    Text(L10n.text("library.refreshing", fallback: "Refreshing library"))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -932,7 +961,7 @@ private struct ScreenshotSlashCard: View {
 
             HStack(spacing: 16) {
                 ActionOrbButton(
-                    title: "Queue",
+                    title: L10n.text("cleanup.queue", fallback: "Queue"),
                     systemImage: "trash.fill",
                     tint: .red,
                     material: .regularMaterial,
@@ -942,7 +971,7 @@ private struct ScreenshotSlashCard: View {
                 }
 
                 ActionOrbButton(
-                    title: "Inspect",
+                    title: L10n.text("cleanup.inspect", fallback: "Inspect"),
                     systemImage: "slider.horizontal.3",
                     tint: .primary,
                     material: .ultraThinMaterial,
@@ -951,7 +980,7 @@ private struct ScreenshotSlashCard: View {
                 )
 
                 ActionOrbButton(
-                    title: "Keep",
+                    title: L10n.text("cleanup.keep", fallback: "Keep"),
                     systemImage: "bookmark.fill",
                     tint: .green,
                     material: .regularMaterial,
@@ -968,14 +997,14 @@ private struct ScreenshotSlashCard: View {
     private var slashIndicator: some View {
         if dragOffset.width > 24 {
             swipeStamp(
-                title: "KEEP",
+                title: L10n.text("cleanup.keep_upper", fallback: "KEEP"),
                 systemImage: "bookmark.fill",
                 tint: .green,
                 rotation: -8
             )
         } else if dragOffset.width < -24 {
             swipeStamp(
-                title: "DELETE",
+                title: L10n.text("cleanup.delete_upper", fallback: "DELETE"),
                 systemImage: "trash.fill",
                 tint: .red,
                 rotation: 8
@@ -1068,12 +1097,12 @@ private struct ReviewCardFace: View {
                     HStack(spacing: 8) {
                         if let expirationDate = asset.expirationDate {
                             Label(
-                                "Expires \(expirationDate.formatted(date: .abbreviated, time: .omitted))",
+                                L10n.text("asset.expires_on", fallback: "Expires %@", expirationDate.formatted(date: .abbreviated, time: .omitted)),
                                 systemImage: "clock"
                             )
                         }
                         if !asset.tags.isEmpty {
-                            Label("\(asset.tags.count) tag\(asset.tags.count == 1 ? "" : "s")", systemImage: "tag")
+                            Label(tagLabel, systemImage: "tag")
                         }
                     }
                     .font(.footnote)
@@ -1098,7 +1127,7 @@ private struct PendingDeletionBar: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(pendingCount) \(itemLabel)\(pendingCount == 1 ? "" : "s") queued")
+                Text(queueCountLabel)
                     .font(.subheadline.weight(.semibold))
                 Text(statusLine)
                     .font(.footnote)
@@ -1108,14 +1137,14 @@ private struct PendingDeletionBar: View {
 
             Spacer()
 
-            Button("Undo", action: onUndo)
+            Button(L10n.text("common.undo", fallback: "Undo"), action: onUndo)
                 .buttonStyle(.bordered)
                 .disabled(isDeleting || isSubmitting)
 
             Button {
                 Task { await submitDeletion() }
             } label: {
-                Text(isDeleting || isSubmitting ? "Deleting..." : "Delete \(pendingCount)")
+                Text(isDeleting || isSubmitting ? L10n.text("cleanup.deleting", fallback: "Deleting...") : L10n.text("cleanup.delete_count", fallback: "Delete %lld", pendingCount))
             }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
@@ -1127,14 +1156,22 @@ private struct PendingDeletionBar: View {
 
     private var statusLine: String {
         if pendingCount >= pendingLimit {
-            return "Queue is full. Delete or undo before adding more screenshots."
+            return L10n.text("cleanup.queue_full", fallback: "Queue is full. Delete or undo before adding more screenshots.")
         }
 
         if let previewAsset {
-            return "Latest queued: \(previewAsset.title)"
+            return L10n.text("cleanup.latest_queued", fallback: "Latest queued: %@", previewAsset.title)
         }
 
-        return "Review more screenshots or delete this batch now."
+        return L10n.text("cleanup.review_or_delete_batch", fallback: "Review more screenshots or delete this batch now.")
+    }
+
+    private var queueCountLabel: String {
+        if pendingCount == 1 {
+            return L10n.text("cleanup.queue_count_singular", fallback: "1 %@ queued", itemLabel)
+        }
+
+        return L10n.text("cleanup.queue_count_plural", fallback: "%lld %@s queued", pendingCount, itemLabel)
     }
 
     private func submitDeletion() async {
@@ -1145,6 +1182,16 @@ private struct PendingDeletionBar: View {
         isSubmitting = true
         await onDeleteNow()
         isSubmitting = false
+    }
+}
+
+private extension ReviewCardFace {
+    var tagLabel: String {
+        if asset.tags.count == 1 {
+            return L10n.text("tags.count.singular", fallback: "1 tag")
+        }
+
+        return L10n.text("tags.count.plural", fallback: "%lld tags", asset.tags.count)
     }
 }
 
@@ -1670,12 +1717,12 @@ private struct AssetEditorSheet: View {
                             )
 
                             if asset.isProtectedFromCleanup {
-                                AssetBadge(title: "Protected", systemImage: "bookmark.fill")
+                                AssetBadge(title: L10n.text("asset.protected", fallback: "Protected"), systemImage: "bookmark.fill")
                             }
                         }
 
                         if let expirationDate = asset.expirationDate {
-                            Text("Expires \(expirationDate.formatted(date: .abbreviated, time: .omitted))")
+                            Text(L10n.text("asset.expires_on", fallback: "Expires %@", expirationDate.formatted(date: .abbreviated, time: .omitted)))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -1683,18 +1730,18 @@ private struct AssetEditorSheet: View {
                     .padding(.vertical, 6)
                 }
 
-                Section("Overview") {
-                    LabeledContent("Created", value: asset.createdAt.formatted(date: .abbreviated, time: .omitted))
-                    LabeledContent("Added", value: asset.addedAt.formatted(date: .abbreviated, time: .omitted))
+                Section(L10n.text("asset.overview", fallback: "Overview")) {
+                    LabeledContent(L10n.text("asset.created", fallback: "Created"), value: asset.createdAt.formatted(date: .abbreviated, time: .omitted))
+                    LabeledContent(L10n.text("asset.added", fallback: "Added"), value: asset.addedAt.formatted(date: .abbreviated, time: .omitted))
                     if let rule = asset.screenshotRule {
-                        LabeledContent("Cleanup Rule", value: rule.displayName)
-                        LabeledContent("Anchor", value: rule.anchor == .creationDate ? "Created Date" : "Added Date")
+                        LabeledContent(L10n.text("asset.cleanup_rule", fallback: "Cleanup Rule"), value: rule.displayName)
+                        LabeledContent(L10n.text("asset.anchor", fallback: "Anchor"), value: rule.anchor == .creationDate ? L10n.text("asset.anchor_created_date", fallback: "Created Date") : L10n.text("asset.anchor_added_date", fallback: "Added Date"))
                     }
                 }
 
-                Section("Actions") {
+                Section(L10n.text("asset.actions", fallback: "Actions")) {
                     if asset.isScreenshot {
-                        Button(asset.isProtectedFromCleanup ? "Remove Protection" : "Protect from Cleanup") {
+                        Button(asset.isProtectedFromCleanup ? L10n.text("asset.remove_protection", fallback: "Remove Protection") : L10n.text("asset.protect_from_cleanup", fallback: "Protect from Cleanup")) {
                             Task {
                                 await onToggleProtection()
                                 await onRefresh()
@@ -1703,7 +1750,7 @@ private struct AssetEditorSheet: View {
                     }
 
                     if asset.kind == .photo || asset.kind == .importedScreenshotLike {
-                        Button(asset.kind == .importedScreenshotLike ? "Back to Photo" : "Treat as Screenshot") {
+                        Button(asset.kind == .importedScreenshotLike ? L10n.text("asset.back_to_photo", fallback: "Back to Photo") : L10n.text("asset.treat_as_screenshot", fallback: "Treat as Screenshot")) {
                             Task {
                                 await onToggleScreenshotLike()
                                 await onRefresh()
@@ -1712,7 +1759,7 @@ private struct AssetEditorSheet: View {
                     }
                 }
 
-                Section("Editors") {
+                Section(L10n.text("asset.editors", fallback: "Editors")) {
                     if asset.isScreenshot {
                         NavigationLink {
                             AssetRuleEditorView(
@@ -1722,8 +1769,8 @@ private struct AssetEditorSheet: View {
                             )
                         } label: {
                             EditorRow(
-                                title: "Rule Editor",
-                                subtitle: asset.screenshotRule?.displayName ?? "No rule"
+                                title: L10n.text("rule.editor_title", fallback: "Rule Editor"),
+                                subtitle: asset.screenshotRule?.displayName ?? L10n.text("rule.no_rule", fallback: "No rule")
                             )
                         }
                     }
@@ -1739,17 +1786,17 @@ private struct AssetEditorSheet: View {
                         )
                     } label: {
                         EditorRow(
-                            title: "Tag Manager",
-                            subtitle: asset.tags.isEmpty ? "No tags" : "\(asset.tags.count) tags"
+                            title: L10n.text("tags.manager_title", fallback: "Tag Manager"),
+                            subtitle: asset.tags.isEmpty ? L10n.text("tags.none", fallback: "No tags") : L10n.text("tags.count.plural", fallback: "%lld tags", asset.tags.count)
                         )
                     }
                 }
             }
-            .navigationTitle("Manage Asset")
+            .navigationTitle(L10n.text("asset.manage_title", fallback: "Manage Asset"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
+                    Button(L10n.text("common.done", fallback: "Done")) {
                         dismiss()
                     }
                 }
@@ -1768,28 +1815,28 @@ private struct AssetRuleEditorView: View {
 
     var body: some View {
         Form {
-            Section("Current Rule") {
+            Section(L10n.text("rule.current_rule", fallback: "Current Rule")) {
                 if let rule = asset.screenshotRule {
-                    LabeledContent("Mode", value: rule.displayName)
-                    LabeledContent("Anchor", value: rule.anchor == .creationDate ? "Created Date" : "Added Date")
+                    LabeledContent(L10n.text("rule.mode", fallback: "Mode"), value: rule.displayName)
+                    LabeledContent(L10n.text("asset.anchor", fallback: "Anchor"), value: rule.anchor == .creationDate ? L10n.text("asset.anchor_created_date", fallback: "Created Date") : L10n.text("asset.anchor_added_date", fallback: "Added Date"))
                     if let expirationDate = asset.expirationDate {
-                        LabeledContent("Expires", value: expirationDate.formatted(date: .abbreviated, time: .omitted))
+                        LabeledContent(L10n.text("asset.expires", fallback: "Expires"), value: expirationDate.formatted(date: .abbreviated, time: .omitted))
                     }
                 } else {
-                    Text("No cleanup rule is set.")
+                    Text(L10n.text("rule.none_set", fallback: "No cleanup rule is set."))
                         .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Anchor") {
-                Picker("Start From", selection: $selectedAnchor) {
-                    Text("Created").tag(ScreenshotRetentionRule.Anchor.creationDate)
-                    Text("Added").tag(ScreenshotRetentionRule.Anchor.addedDate)
+            Section(L10n.text("asset.anchor", fallback: "Anchor")) {
+                Picker(L10n.text("rule.start_from", fallback: "Start From"), selection: $selectedAnchor) {
+                    Text(L10n.text("asset.created", fallback: "Created")).tag(ScreenshotRetentionRule.Anchor.creationDate)
+                    Text(L10n.text("asset.added", fallback: "Added")).tag(ScreenshotRetentionRule.Anchor.addedDate)
                 }
                 .pickerStyle(.segmented)
             }
 
-            Section("Presets") {
+            Section(L10n.text("rule.presets", fallback: "Presets")) {
                 ForEach(ScreenshotRetentionRule.RetentionPreset.allCases) { preset in
                     Button(preset.displayName) {
                         Task {
@@ -1802,13 +1849,13 @@ private struct AssetRuleEditorView: View {
                 }
             }
 
-            Section("Custom Minutes") {
+            Section(L10n.text("rule.custom_minutes", fallback: "Custom Minutes")) {
                 HStack {
-                    TextField("Minutes", text: $customMinuteCount)
+                    TextField(L10n.text("rule.minutes", fallback: "Minutes"), text: $customMinuteCount)
                         .keyboardType(.numberPad)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                    Button("Apply") {
+                    Button(L10n.text("common.apply", fallback: "Apply")) {
                         guard let minutes = Int(customMinuteCount), minutes >= 1 else {
                             return
                         }
@@ -1821,12 +1868,12 @@ private struct AssetRuleEditorView: View {
                         }
                     }
                 }
-                Text("Minimum is 1 minute so you can verify auto-cleanup quickly during testing.")
+                Text(L10n.text("rule.minimum_notice", fallback: "Minimum is 1 minute so you can verify auto-cleanup quickly during testing."))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Rule Editor")
+        .navigationTitle(L10n.text("rule.editor_title", fallback: "Rule Editor"))
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             selectedAnchor = asset.screenshotRule?.anchor ?? .creationDate
@@ -1850,16 +1897,16 @@ private struct AssetTagManagerView: View {
 
     var body: some View {
         Form {
-            Section("Current Tags") {
+            Section(L10n.text("tags.current_tags", fallback: "Current Tags")) {
                 if asset.tags.isEmpty {
-                    Text("No tags yet.")
+                    Text(L10n.text("tags.none_yet", fallback: "No tags yet."))
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(asset.tags) { tag in
                         HStack {
                             TagPill(tag: tag)
                             Spacer()
-                            Button("Remove") {
+                            Button(L10n.text("common.remove", fallback: "Remove")) {
                                 Task {
                                     await onRemoveTag(tag)
                                     await onRefresh()
@@ -1871,9 +1918,9 @@ private struct AssetTagManagerView: View {
                 }
             }
 
-            Section("Global Tag Library") {
+            Section(L10n.text("tags.global_library", fallback: "Global Tag Library")) {
                 if suggestionEntries.isEmpty {
-                    Text("No saved tag suggestions yet.")
+                    Text(L10n.text("tags.no_saved_suggestions", fallback: "No saved tag suggestions yet."))
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(suggestionEntries) { entry in
@@ -1894,7 +1941,7 @@ private struct AssetTagManagerView: View {
                         .buttonStyle(.plain)
                     }
 
-                    Button("Apply Selected Tags") {
+                    Button(L10n.text("tags.apply_selected", fallback: "Apply Selected Tags")) {
                         let entries = suggestionEntries.filter { selectedBatchTagIDs.contains($0.id) }
                         Task {
                             await onAddTags(entries)
@@ -1906,8 +1953,8 @@ private struct AssetTagManagerView: View {
                 }
             }
 
-            Section("Create Tag") {
-                TextField("New tag", text: $draftTagName)
+            Section(L10n.text("tags.create_tag", fallback: "Create Tag")) {
+                TextField(L10n.text("tags.new_tag", fallback: "New tag"), text: $draftTagName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
@@ -1940,7 +1987,7 @@ private struct AssetTagManagerView: View {
                 }
             }
         }
-        .navigationTitle("Tag Manager")
+        .navigationTitle(L10n.text("tags.manager_title", fallback: "Tag Manager"))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -1959,7 +2006,11 @@ private struct AssetTagManagerView: View {
 }
 
 private func photoCountLabel(for count: Int) -> String {
-    "\(count) photo" + (count == 1 ? "" : "s")
+    if count == 1 {
+        return L10n.text("photos.count.singular", fallback: "1 photo")
+    }
+
+    return L10n.text("photos.count.plural", fallback: "%lld photos", count)
 }
 
 private struct EditorRow: View {
@@ -2114,7 +2165,7 @@ private struct TagUsageRow: View {
                 .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
-                Text("Used by \(usageCount) asset\(usageCount == 1 ? "" : "s")")
+                Text(usageCount == 1 ? L10n.text("tags.used_by_one", fallback: "Used by 1 asset") : L10n.text("tags.used_by_many", fallback: "Used by %lld assets", usageCount))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -2133,11 +2184,11 @@ private enum TagColorPreset: CaseIterable, Identifiable {
 
     var name: String {
         switch self {
-        case .ember: "Ember"
-        case .moss: "Moss"
-        case .ocean: "Ocean"
-        case .plum: "Plum"
-        case .sand: "Sand"
+        case .ember: L10n.text("tag_color.ember", fallback: "Ember")
+        case .moss: L10n.text("tag_color.moss", fallback: "Moss")
+        case .ocean: L10n.text("tag_color.ocean", fallback: "Ocean")
+        case .plum: L10n.text("tag_color.plum", fallback: "Plum")
+        case .sand: L10n.text("tag_color.sand", fallback: "Sand")
         }
     }
 

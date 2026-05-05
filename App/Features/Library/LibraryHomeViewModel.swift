@@ -11,11 +11,11 @@ enum LibraryCollection: String, CaseIterable, Hashable, Identifiable {
     var title: String {
         switch self {
         case .all:
-            "All"
+            L10n.text("library.collection.all", fallback: "All")
         case .screenshots:
-            "Screenshots"
+            L10n.text("library.collection.screenshots", fallback: "Screenshots")
         case .photos:
-            "Photos"
+            L10n.text("library.collection.photos", fallback: "Photos")
         }
     }
 }
@@ -29,9 +29,9 @@ enum CleanupReviewMode: String, CaseIterable, Hashable, Identifiable {
     var title: String {
         switch self {
         case .screenshots:
-            "Screenshots"
+            L10n.text("cleanup.mode.screenshots", fallback: "Screenshots")
         case .allPhotos:
-            "All Photos"
+            L10n.text("cleanup.mode.all_photos", fallback: "All Photos")
         }
     }
 }
@@ -590,7 +590,7 @@ final class LibraryHomeViewModel {
                 await scheduleNextCleanupReminder()
             }
         } catch {
-            authorizationErrorMessage = "Cleanup failed while deleting expired screenshots."
+            authorizationErrorMessage = L10n.text("error.cleanup_delete_failed", fallback: "Cleanup failed while deleting expired screenshots.")
         }
     }
 
@@ -618,7 +618,7 @@ final class LibraryHomeViewModel {
             await persistSnapshot()
             return true
         } catch {
-            cleanupReviewMessage = "Deletion was not allowed. The screenshot was kept."
+            cleanupReviewMessage = L10n.text("cleanup.delete_denied_single", fallback: "Deletion was not allowed. The screenshot was kept.")
             return false
         }
     }
@@ -626,7 +626,7 @@ final class LibraryHomeViewModel {
     @discardableResult
     func stageAssetForDeletion(_ asset: MediaAsset) -> Bool {
         guard pendingDeletionAssets.count < reviewDeletionBatchLimit else {
-            cleanupReviewMessage = "Delete the queued screenshots before adding more than \(reviewDeletionBatchLimit)."
+            cleanupReviewMessage = L10n.text("cleanup.queue_limit", fallback: "Delete the queued screenshots before adding more than %lld.", reviewDeletionBatchLimit)
             return false
         }
 
@@ -650,7 +650,7 @@ final class LibraryHomeViewModel {
         let identifiers = stagedAssets.compactMap(\.libraryIdentifier)
         guard identifiers.count == stagedAssets.count else {
             restorePendingDeletionAssets(stagedAssets)
-            cleanupReviewMessage = "Some queued screenshots could not be deleted and were restored."
+            cleanupReviewMessage = L10n.text("cleanup.restore_failed_batch", fallback: "Some queued screenshots could not be deleted and were restored.")
             return false
         }
 
@@ -672,7 +672,7 @@ final class LibraryHomeViewModel {
             return true
         } catch {
             restorePendingDeletionAssets(stagedAssets)
-            cleanupReviewMessage = "Deletion was not allowed. The queued screenshots were kept."
+            cleanupReviewMessage = L10n.text("cleanup.delete_denied_batch", fallback: "Deletion was not allowed. The queued screenshots were kept.")
             return false
         }
     }
@@ -696,11 +696,15 @@ final class LibraryHomeViewModel {
     }
 
     var cleanupPromptTitle: String {
-        "Ready to Clean \(cleanupCandidates.count) Screenshot\(cleanupCandidates.count == 1 ? "" : "s")?"
+        if cleanupCandidates.count == 1 {
+            return L10n.text("cleanup.prompt_title_one", fallback: "Ready to Clean 1 Screenshot?")
+        }
+
+        return L10n.text("cleanup.prompt_title_many", fallback: "Ready to Clean %lld Screenshots?", cleanupCandidates.count)
     }
 
     var cleanupPromptMessage: String {
-        "Snapuary found expired screenshots in the system Photos library. Confirm to delete them now."
+        L10n.text("cleanup.prompt_message", fallback: "Snapuary found expired screenshots in the system Photos library. Confirm to delete them now.")
     }
 
     func requestCleanupReminderPermission() async {
@@ -724,20 +728,20 @@ final class LibraryHomeViewModel {
                 now: .now
             )
         } catch {
-            authorizationErrorMessage = "Failed to schedule the next cleanup reminder."
+            authorizationErrorMessage = L10n.text("error.schedule_cleanup_reminder", fallback: "Failed to schedule the next cleanup reminder.")
         }
     }
 
     private func authorizationMessage(for status: PhotoLibraryAuthorizationStatus) -> String {
         switch status {
         case .notDetermined:
-            "Snapuary needs access to the photo library to classify screenshots and manage cleanup rules."
+            L10n.text("photo_access.message.not_determined", fallback: "Snapuary needs access to the photo library to classify screenshots and manage cleanup rules.")
         case .denied:
-            "Photo access is denied. Enable Photos access in Settings to scan screenshots."
+            L10n.text("photo_access.message.denied", fallback: "Photo access is denied. Enable Photos access in Settings to scan screenshots.")
         case .restricted:
-            "Photo access is restricted on this device."
+            L10n.text("photo_access.message.restricted", fallback: "Photo access is restricted on this device.")
         case .limited:
-            "Limited photo access is active. Snapuary can only scan the photos you selected."
+            L10n.text("photo_access.message.limited", fallback: "Limited photo access is active. Snapuary can only scan the photos you selected.")
         case .authorized:
             ""
         }
@@ -798,7 +802,7 @@ final class LibraryHomeViewModel {
             await persistSnapshot()
         } catch {
             resetLibraryState()
-            authorizationErrorMessage = "Failed to load photos from the library."
+            authorizationErrorMessage = L10n.text("error.load_photos", fallback: "Failed to load photos from the library.")
             nextCleanupReminder = nil
             shouldPromptForCleanup = false
         }
@@ -845,7 +849,7 @@ final class LibraryHomeViewModel {
             hasLoadedCompleteLibrary = currentOffset >= totalAssetCount
             await persistSnapshot()
         } catch {
-            authorizationErrorMessage = "Failed to load more photos from the library."
+            authorizationErrorMessage = L10n.text("error.load_more_photos", fallback: "Failed to load more photos from the library.")
         }
     }
 
@@ -910,7 +914,7 @@ final class LibraryHomeViewModel {
             recalculateCleanupState()
             await persistSnapshot()
         } catch {
-            authorizationErrorMessage = "Failed to save local asset metadata."
+            authorizationErrorMessage = L10n.text("error.save_metadata", fallback: "Failed to save local asset metadata.")
         }
     }
 
@@ -944,7 +948,7 @@ final class LibraryHomeViewModel {
                 )
             )
         } catch {
-            authorizationErrorMessage = "Failed to save the local library index."
+            authorizationErrorMessage = L10n.text("error.save_library_index", fallback: "Failed to save the local library index.")
         }
     }
 

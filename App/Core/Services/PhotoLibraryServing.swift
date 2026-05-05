@@ -35,15 +35,15 @@ enum PhotoLibraryAuthorizationStatus: String, Hashable {
     var displayName: String {
         switch self {
         case .notDetermined:
-            "Not Determined"
+            L10n.text("photo_access.not_determined", fallback: "Not Determined")
         case .authorized:
-            "Authorized"
+            L10n.text("photo_access.authorized", fallback: "Authorized")
         case .limited:
-            "Limited Access"
+            L10n.text("photo_access.limited", fallback: "Limited Access")
         case .denied:
-            "Denied"
+            L10n.text("photo_access.denied", fallback: "Denied")
         case .restricted:
-            "Restricted"
+            L10n.text("photo_access.restricted", fallback: "Restricted")
         }
     }
 }
@@ -432,22 +432,22 @@ struct PhotoLibraryAssetDescriptor: Hashable {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
 
-        let dateSuffix = date.map { formatter.string(from: $0) } ?? "Unknown Date"
+        let dateSuffix = date.map { formatter.string(from: $0) } ?? L10n.text("asset.unknown_date", fallback: "Unknown Date")
         let size = pixelWidth > 0 && pixelHeight > 0 ? "\(pixelWidth)x\(pixelHeight)" : nil
 
         switch kind {
         case .systemScreenshot:
             if let size {
-                return "Screenshot \(dateSuffix) · \(size)"
+                return L10n.text("asset.generated_title.screenshot_size", fallback: "Screenshot %@ · %@", dateSuffix, size)
             }
-            return "Screenshot \(dateSuffix)"
+            return L10n.text("asset.generated_title.screenshot", fallback: "Screenshot %@", dateSuffix)
         case .importedScreenshotLike:
-            return "Imported Screenshot \(dateSuffix)"
+            return L10n.text("asset.generated_title.imported_screenshot", fallback: "Imported Screenshot %@", dateSuffix)
         case .photo:
             if let size {
-                return "Photo \(dateSuffix) · \(size)"
+                return L10n.text("asset.generated_title.photo_size", fallback: "Photo %@ · %@", dateSuffix, size)
             }
-            return "Photo \(dateSuffix)"
+            return L10n.text("asset.generated_title.photo", fallback: "Photo %@", dateSuffix)
         }
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 
 struct AppContainer {
+    let settingsStore: AppSettingsStore
     let photoLibraryService: PhotoLibraryServing
     let thumbnailStore: PhotoLibraryThumbnailStore
     let assetIndexCache: MediaAssetIndexCaching
@@ -13,8 +14,10 @@ struct AppContainer {
     static let assetIndexCache = FileBackedMediaAssetIndexCache()
     static let cleanupSchedulingService = UserNotificationCleanupScheduler()
     static let thumbnailStore = PhotoLibraryThumbnailStore()
+    static let settingsStore = AppSettingsStore()
 
     static let live = AppContainer(
+        settingsStore: settingsStore,
         photoLibraryService: MetadataMergingPhotoLibraryService(
             base: PhotoKitPhotoLibraryService(thumbnailStore: thumbnailStore),
             metadataStore: metadataService

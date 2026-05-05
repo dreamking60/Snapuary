@@ -9,11 +9,12 @@ enum RootTab: Hashable {
 
 @Observable
 final class RootTabViewModel {
-    var selectedTab: RootTab = .library
+    var selectedTab: RootTab
 
     private let libraryViewModel: LibraryHomeViewModel
 
     init(container: AppContainer) {
+        self.selectedTab = container.settingsStore.preferredLaunchTab
         self.libraryViewModel = LibraryHomeViewModel(
             photoLibraryService: container.photoLibraryService,
             thumbnailStore: container.thumbnailStore,
