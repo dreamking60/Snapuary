@@ -3,7 +3,7 @@ import XCTest
 @testable import Snapuary
 
 final class SnapuaryTests: XCTestCase {
-    func cleanupSummaryCountsProtectedItems() {
+    func testCleanupSummaryCountsProtectedItems() {
         let service = MockScreenshotExpirationService()
         let assets = [
             MediaAsset(
@@ -27,7 +27,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(summary.totalScreenshotCount, 1)
     }
 
-    func importedScreenshotLikeCanExpireFromAddedDate() throws {
+    func testImportedScreenshotLikeCanExpireFromAddedDate() throws {
         let asset = MediaAsset(
             id: UUID(),
             libraryIdentifier: nil,
@@ -48,7 +48,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertTrue(Calendar.current.isDate(expirationDate, equalTo: expectedDate ?? expirationDate, toGranularity: .day))
     }
 
-    func customMinuteRetentionRuleReturnsExplicitMinuteOffset() throws {
+    func testCustomMinuteRetentionRuleReturnsExplicitMinuteOffset() throws {
         let asset = MediaAsset(
             id: UUID(),
             libraryIdentifier: nil,
@@ -66,7 +66,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(expirationDate.timeIntervalSince1970, expectedDate.timeIntervalSince1970, accuracy: 1)
     }
 
-    func photoKitDescriptorMapsScreenshotSubtypeToSystemScreenshot() {
+    func testPhotoKitDescriptorMapsScreenshotSubtypeToSystemScreenshot() {
         let descriptor = PhotoLibraryAssetDescriptor(
             localIdentifier: "asset-1",
             mediaSubtypesRawValue: PHAssetMediaSubtype.photoScreenshot.rawValue,
@@ -83,7 +83,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(asset.screenshotRule?.displayName, "1 Month")
     }
 
-    func photoKitDescriptorMapsRegularImageToPhoto() {
+    func testPhotoKitDescriptorMapsRegularImageToPhoto() {
         let descriptor = PhotoLibraryAssetDescriptor(
             localIdentifier: "asset-2",
             mediaSubtypesRawValue: 0,
@@ -100,7 +100,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertNil(asset.screenshotRule)
     }
 
-    func screenshotAlbumMembershipCanPromoteImageToScreenshot() {
+    func testScreenshotAlbumMembershipCanPromoteImageToScreenshot() {
         let descriptor = PhotoLibraryAssetDescriptor(
             localIdentifier: "asset-3",
             mediaSubtypesRawValue: 0,
@@ -117,7 +117,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(asset.screenshotRule?.displayName, "1 Month")
     }
 
-    func metadataMergeCanPromotePhotoToImportedScreenshotLike() async throws {
+    func testMetadataMergeCanPromotePhotoToImportedScreenshotLike() async throws {
         let base = MockPhotoLibraryService()
         let metadataStore = InMemoryMediaAssetMetadataStore(records: [
             "mock-photo-1": MediaAssetMetadataRecord(
@@ -140,7 +140,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(asset.screenshotRule?.displayName, "1 Month")
     }
 
-    func fileBackedMetadataStoreRoundTripsRecords() async throws {
+    func testFileBackedMetadataStoreRoundTripsRecords() async throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("metadata.json", isDirectory: false)
@@ -158,10 +158,11 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(records["asset-3"], record)
     }
 
-    func libraryHomeViewModelCanAddAndRemoveTag() async throws {
+    func testLibraryHomeViewModelCanAddAndRemoveTag() async throws {
         let metadataStore = InMemoryMediaAssetMetadataStore()
         let viewModel = LibraryHomeViewModel(
             photoLibraryService: MockPhotoLibraryService(),
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
@@ -180,7 +181,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertFalse(cleanedAsset.tags.contains(where: { $0.name == "Travel" }))
     }
 
-    func tagLibraryOrdersByUsageCount() async throws {
+    func testTagLibraryOrdersByUsageCount() async throws {
         let photoLibraryService = InMemoryPhotoLibraryService(assets: [
             MediaAsset(
                 id: UUID(),
@@ -212,6 +213,7 @@ final class SnapuaryTests: XCTestCase {
         ])
         let viewModel = LibraryHomeViewModel(
             photoLibraryService: photoLibraryService,
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
@@ -224,10 +226,11 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(library.first?.usageCount, 2)
     }
 
-    func libraryHomeViewModelCanBatchApplyGlobalTags() async throws {
+    func testLibraryHomeViewModelCanBatchApplyGlobalTags() async throws {
         let metadataStore = InMemoryMediaAssetMetadataStore()
         let viewModel = LibraryHomeViewModel(
             photoLibraryService: MockPhotoLibraryService(),
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
@@ -259,7 +262,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertTrue(updatedAsset.tags.contains(where: { $0.name == "Reference" }))
     }
 
-    func expirationServiceReturnsOnlyExpiredUnprotectedScreenshots() {
+    func testExpirationServiceReturnsOnlyExpiredUnprotectedScreenshots() {
         let service = MockScreenshotExpirationService()
         let assets = [
             MediaAsset(
@@ -301,7 +304,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(candidates.compactMap(\.libraryIdentifier), ["expired-shot"])
     }
 
-    func libraryHomeViewModelCleanupRemovesExpiredAssetsAndMetadata() async throws {
+    func testLibraryHomeViewModelCleanupRemovesExpiredAssetsAndMetadata() async throws {
         let photoLibraryService = InMemoryPhotoLibraryService(assets: [
             MediaAsset(
                 id: UUID(),
@@ -325,6 +328,7 @@ final class SnapuaryTests: XCTestCase {
         ])
         let viewModel = LibraryHomeViewModel(
             photoLibraryService: photoLibraryService,
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
@@ -341,7 +345,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(viewModel.lastCleanupResult?.deletedCount, 1)
     }
 
-    func cleanupSchedulerSchedulesNearestFutureExpiration() async throws {
+    func testCleanupSchedulerSchedulesNearestFutureExpiration() async throws {
         let scheduler = InMemoryCleanupSchedulingService()
         let assets = [
             MediaAsset(
@@ -365,7 +369,7 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(reminder?.candidateCount, 1)
     }
 
-    func inMemoryPhotoLibraryServiceCanYieldAssetsInBatches() async throws {
+    func testInMemoryPhotoLibraryServiceFetchesAssetsInPages() async throws {
         let service = InMemoryPhotoLibraryService(assets: [
             MediaAsset(
                 id: UUID(),
@@ -402,12 +406,29 @@ final class SnapuaryTests: XCTestCase {
             )
         ])
 
-        var batches: [[String]] = []
-        for try await batch in service.fetchAssetBatches(batchSize: 2) {
-            batches.append(batch.compactMap(\.libraryIdentifier))
-        }
+        let totalCount = try await service.refreshAssetIndex()
+        let firstPage = try await service.fetchAssetPage(offset: 0, limit: 2)
+        let secondPage = try await service.fetchAssetPage(offset: 2, limit: 2)
 
-        XCTAssertEqual(batches, [["batch-1", "batch-2"], ["batch-3"]])
+        XCTAssertEqual(totalCount, 3)
+        XCTAssertEqual(firstPage.compactMap(\.libraryIdentifier), ["batch-1", "batch-2"])
+        XCTAssertEqual(secondPage.compactMap(\.libraryIdentifier), ["batch-3"])
+    }
+}
+
+actor InMemoryMediaAssetIndexCache: MediaAssetIndexCaching {
+    private var snapshot: MediaAssetIndexSnapshot?
+
+    func loadSnapshot() async throws -> MediaAssetIndexSnapshot? {
+        snapshot
+    }
+
+    func saveSnapshot(_ snapshot: MediaAssetIndexSnapshot) async throws {
+        self.snapshot = snapshot
+    }
+
+    func clearSnapshot() async throws {
+        snapshot = nil
     }
 }
 
@@ -448,26 +469,25 @@ final class InMemoryPhotoLibraryService: PhotoLibraryServing {
         .authorized
     }
 
-    func fetchAssets() async throws -> [MediaAsset] {
-        assets
+    func libraryFingerprint() async throws -> PhotoLibraryFingerprint {
+        PhotoLibraryFingerprint(
+            totalCount: assets.count,
+            leadingIdentifiers: Array(assets.prefix(8).compactMap(\.libraryIdentifier)),
+            trailingIdentifiers: Array(assets.suffix(8).compactMap(\.libraryIdentifier))
+        )
     }
 
-    func fetchAssetBatches(batchSize: Int) -> AsyncThrowingStream<[MediaAsset], Error> {
-        let effectiveBatchSize = max(batchSize, 1)
+    func refreshAssetIndex() async throws -> Int {
+        assets.count
+    }
 
-        return AsyncThrowingStream { continuation in
-            Task {
-                var startIndex = assets.startIndex
-
-                while startIndex < assets.endIndex {
-                    let endIndex = min(startIndex + effectiveBatchSize, assets.endIndex)
-                    continuation.yield(Array(assets[startIndex..<endIndex]))
-                    startIndex = endIndex
-                }
-
-                continuation.finish()
-            }
+    func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset] {
+        guard limit > 0, offset < assets.count else {
+            return []
         }
+
+        let endIndex = min(offset + limit, assets.count)
+        return Array(assets[offset..<endIndex])
     }
 
     func deleteAssets(withLocalIdentifiers identifiers: [String]) async throws {
