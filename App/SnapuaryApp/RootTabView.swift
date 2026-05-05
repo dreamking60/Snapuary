@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct RootTabView: View {
+    @Environment(AppSettingsStore.self) private var settings
+    @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel: RootTabViewModel
 
     init(viewModel: RootTabViewModel) {
@@ -8,6 +10,8 @@ struct RootTabView: View {
     }
 
     var body: some View {
+        let _ = settings.preferredLanguage
+
         TabView(selection: $viewModel.selectedTab) {
             LibraryHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
@@ -26,6 +30,15 @@ struct RootTabView: View {
                     Label(L10n.text("tab.cleanup", fallback: "Cleanup"), systemImage: "trash")
                 }
                 .tag(RootTab.cleanup)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else {
+                return
+            }
+
+            Task {
+                await viewModel.makeLibraryViewModel().handleAppDidBecomeActive()
+            }
         }
     }
 }

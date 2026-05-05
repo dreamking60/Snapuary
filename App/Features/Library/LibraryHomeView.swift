@@ -2,6 +2,7 @@ import Photos
 import SwiftUI
 
 struct LibraryHomeView: View {
+    @Environment(AppSettingsStore.self) private var settings
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
     @State private var isShowingProfileSheet = false
@@ -17,6 +18,7 @@ struct LibraryHomeView: View {
     }
 
     var body: some View {
+        let _ = settings.preferredLanguage
         @Bindable var viewModel = viewModel
 
         NavigationStack {
@@ -141,6 +143,7 @@ struct LibraryHomeView: View {
 }
 
 struct CleanupHomeView: View {
+    @Environment(AppSettingsStore.self) private var settings
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
     @State private var previewAsset: MediaAsset?
@@ -151,6 +154,7 @@ struct CleanupHomeView: View {
     }
 
     var body: some View {
+        let _ = settings.preferredLanguage
         NavigationStack {
             Group {
                 if !viewModel.authorizationStatus.canReadAssets,
@@ -280,6 +284,7 @@ struct CleanupHomeView: View {
 }
 
 struct TagHomeView: View {
+    @Environment(AppSettingsStore.self) private var settings
     @State private var viewModel: LibraryHomeViewModel
 
     init(viewModel: LibraryHomeViewModel) {
@@ -287,6 +292,7 @@ struct TagHomeView: View {
     }
 
     var body: some View {
+        let _ = settings.preferredLanguage
         NavigationStack {
             Group {
                 if let message = viewModel.authorizationErrorMessage {

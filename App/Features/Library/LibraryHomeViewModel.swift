@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Photos
 
 enum LibraryCollection: String, CaseIterable, Hashable, Identifiable {
     case all
@@ -100,6 +101,7 @@ final class LibraryHomeViewModel {
     private var cachedFingerprint: PhotoLibraryFingerprint?
     private var currentOffset = 0
     private var cleanupSyncTask: Task<Void, Never>?
+    private let photoLibraryChangeObserver = PhotoLibraryChangeObserverProxy()
 
     init(
         photoLibraryService: PhotoLibraryServing,
@@ -117,6 +119,14 @@ final class LibraryHomeViewModel {
         self.cleanupSchedulingService = cleanupSchedulingService
         self.authorizationStatus = photoLibraryService.authorizationStatus()
         self.totalCleanupDeletedCount = UserDefaults.standard.integer(forKey: cleanupDeletionCountKey)
+        photoLibraryChangeObserver.onChange = { [weak self] in
+            self?.handleObservedPhotoLibraryChange()
+        }
+        photoLibraryChangeObserver.register()
+    }
+
+    deinit {
+        photoLibraryChangeObserver.unregister()
     }
 
     var loadProgress: Double {
@@ -148,6 +158,10 @@ final class LibraryHomeViewModel {
         await load(scope: .complete)
         hasSynchronizedBrowsingThisLaunch = true
         hasSynchronizedCompleteThisLaunch = true
+    }
+
+    func handleAppDidBecomeActive() async {
+        await refreshForExternalLibraryChange(scope: .browsing)
     }
 
     func loadMoreIfNeeded(visibleIndex _: Int) async {
@@ -1024,6 +1038,41 @@ final class LibraryHomeViewModel {
         }
     }
 
+    private func handleObservedPhotoLibraryChange() {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                return
+            }
+
+            await self.refreshForExternalLibraryChange(
+                scope: self.hasLoadedCompleteLibrary ? .complete : .browsing
+            )
+        }
+    }
+
+    private func refreshForExternalLibraryChange(scope: LoadScope) async {
+        guard hasHydratedCache || !assets.isEmpty || authorizationStatus.canReadAssets else {
+            return
+        }
+
+        hasSynchronizedBrowsingThisLaunch = false
+        hasSynchronizedCompleteThisLaunch = false
+        cachedFingerprint = nil
+
+        if !pendingDeletionAssets.isEmpty {
+            pendingDeletionAssets.removeAll()
+        }
+
+        await load(scope: scope)
+
+        if scope == .complete {
+            hasSynchronizedBrowsingThisLaunch = true
+            hasSynchronizedCompleteThisLaunch = true
+        } else {
+            hasSynchronizedBrowsingThisLaunch = true
+        }
+    }
+
     private func reloadAfterLibraryMutation(scope: LoadScope) async {
         hasSynchronizedBrowsingThisLaunch = false
         hasSynchronizedCompleteThisLaunch = false
@@ -1054,5 +1103,32 @@ final class LibraryHomeViewModel {
             readyToCleanCount: 0
         )
         cleanupCandidates = []
+    }
+}
+
+private final class PhotoLibraryChangeObserverProxy: NSObject, PHPhotoLibraryChangeObserver {
+    var onChange: (() -> Void)?
+    private var isRegistered = false
+
+    func register() {
+        guard !isRegistered else {
+            return
+        }
+
+        PHPhotoLibrary.shared().register(self)
+        isRegistered = true
+    }
+
+    func unregister() {
+        guard isRegistered else {
+            return
+        }
+
+        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+        isRegistered = false
+    }
+
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        onChange?()
     }
 }

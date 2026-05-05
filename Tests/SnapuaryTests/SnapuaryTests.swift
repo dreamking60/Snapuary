@@ -414,6 +414,47 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(firstPage.compactMap(\.libraryIdentifier), ["batch-1", "batch-2"])
         XCTAssertEqual(secondPage.compactMap(\.libraryIdentifier), ["batch-3"])
     }
+
+    func testLibraryHomeViewModelRefreshesWhenAppBecomesActiveAfterNewPhotosArrive() async throws {
+        let originalAsset = MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "original-1",
+            title: "Original",
+            createdAt: .now.addingTimeInterval(-3_600),
+            addedAt: .now.addingTimeInterval(-3_600),
+            tags: [],
+            kind: .photo,
+            screenshotRule: nil,
+            isProtectedFromCleanup: false
+        )
+        let newAsset = MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "new-1",
+            title: "New Arrival",
+            createdAt: .now,
+            addedAt: .now,
+            tags: [],
+            kind: .photo,
+            screenshotRule: nil,
+            isProtectedFromCleanup: false
+        )
+        let service = InMemoryPhotoLibraryService(assets: [originalAsset])
+        let viewModel = LibraryHomeViewModel(
+            photoLibraryService: service,
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
+            metadataService: InMemoryMediaAssetMetadataStore(),
+            expirationService: MockScreenshotExpirationService(),
+            cleanupSchedulingService: InMemoryCleanupSchedulingService()
+        )
+
+        await viewModel.loadForBrowsing()
+        XCTAssertEqual(viewModel.assets.compactMap(\.libraryIdentifier), ["original-1"])
+
+        service.setAssets([newAsset, originalAsset])
+        await viewModel.handleAppDidBecomeActive()
+
+        XCTAssertEqual(viewModel.assets.compactMap(\.libraryIdentifier), ["new-1", "original-1"])
+    }
 }
 
 actor InMemoryMediaAssetIndexCache: MediaAssetIndexCaching {
@@ -458,6 +499,10 @@ final class InMemoryPhotoLibraryService: PhotoLibraryServing {
     private var assets: [MediaAsset]
 
     init(assets: [MediaAsset]) {
+        self.assets = assets
+    }
+
+    func setAssets(_ assets: [MediaAsset]) {
         self.assets = assets
     }
 

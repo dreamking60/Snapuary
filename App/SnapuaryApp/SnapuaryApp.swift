@@ -6,6 +6,8 @@ struct SnapuaryApp: App {
     @State private var settings = AppContainer.live.settingsStore
 
     var body: some Scene {
+        @Bindable var settings = settings
+
         WindowGroup {
             RootTabView(viewModel: RootTabViewModel(container: container))
                 .environment(settings)
