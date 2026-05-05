@@ -972,6 +972,7 @@ private struct ScreenshotSlashCard: View {
                 ActionOrbButton(
                     title: L10n.text("cleanup.queue", fallback: "Queue"),
                     systemImage: "trash.fill",
+                    tint: .red,
                     isEnabled: !isActing
                 ) {
                     Task { await performDelete() }
@@ -980,6 +981,7 @@ private struct ScreenshotSlashCard: View {
                 ActionOrbButton(
                     title: L10n.text("cleanup.inspect", fallback: "Inspect"),
                     systemImage: "slider.horizontal.3",
+                    tint: .blue,
                     isEnabled: !isActing,
                     action: onOpenDetail
                 )
@@ -987,6 +989,7 @@ private struct ScreenshotSlashCard: View {
                 ActionOrbButton(
                     title: L10n.text("cleanup.keep", fallback: "Keep"),
                     systemImage: "bookmark.fill",
+                    tint: .green,
                     isEnabled: !isActing
                 ) {
                     Task { await performKeep() }
@@ -1201,6 +1204,7 @@ private extension ReviewCardFace {
 private struct ActionOrbButton: View {
     let title: String
     let systemImage: String
+    let tint: Color
     let isEnabled: Bool
     let action: () -> Void
 
@@ -1209,7 +1213,7 @@ private struct ActionOrbButton: View {
             VStack(spacing: 10) {
                 Image(systemName: systemImage)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(tint)
                     .frame(width: 58, height: 58)
                     .background(
                         Circle()
@@ -1219,7 +1223,7 @@ private struct ActionOrbButton: View {
 
                 Text(title)
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(tint)
             }
             .frame(maxWidth: .infinity)
         }
