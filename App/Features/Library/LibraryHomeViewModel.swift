@@ -45,6 +45,7 @@ struct TagLibraryEntry: Identifiable, Hashable {
     let usageCount: Int
 }
 
+@MainActor
 @Observable
 final class LibraryHomeViewModel {
     private enum LoadScope {
@@ -161,7 +162,8 @@ final class LibraryHomeViewModel {
     }
 
     func handleAppDidBecomeActive() async {
-        await refreshForExternalLibraryChange(scope: .browsing)
+        let scope: LoadScope = hasLoadedCompleteLibrary ? .complete : .browsing
+        await refreshForExternalLibraryChange(scope: scope)
     }
 
     func loadMoreIfNeeded(visibleIndex _: Int) async {
@@ -1031,15 +1033,13 @@ final class LibraryHomeViewModel {
             }
 
             await self.load()
-            await MainActor.run {
-                self.isSyncingCleanupData = false
-                self.cleanupSyncTask = nil
-            }
+            self.isSyncingCleanupData = false
+            self.cleanupSyncTask = nil
         }
     }
 
     private func handleObservedPhotoLibraryChange() {
-        Task { @MainActor [weak self] in
+        Task { [weak self] in
             guard let self else {
                 return
             }
@@ -1055,22 +1055,23 @@ final class LibraryHomeViewModel {
             return
         }
 
-        hasSynchronizedBrowsingThisLaunch = false
-        hasSynchronizedCompleteThisLaunch = false
-        cachedFingerprint = nil
+        do {
+            let fingerprint = try await photoLibraryService.libraryFingerprint()
+            totalAssetCount = fingerprint.totalCount
+
+            guard cachedFingerprint != fingerprint else {
+                return
+            }
+        } catch {
+            authorizationErrorMessage = L10n.text("error.load_photos", fallback: "Failed to load photos from the library.")
+            return
+        }
 
         if !pendingDeletionAssets.isEmpty {
             pendingDeletionAssets.removeAll()
         }
 
-        await load(scope: scope)
-
-        if scope == .complete {
-            hasSynchronizedBrowsingThisLaunch = true
-            hasSynchronizedCompleteThisLaunch = true
-        } else {
-            hasSynchronizedBrowsingThisLaunch = true
-        }
+        await reloadAfterLibraryMutation(scope: scope)
     }
 
     private func reloadAfterLibraryMutation(scope: LoadScope) async {
@@ -1078,7 +1079,10 @@ final class LibraryHomeViewModel {
         hasSynchronizedCompleteThisLaunch = false
         cachedFingerprint = nil
         await load(scope: scope)
+        markScopeAsSynchronized(scope)
+    }
 
+    private func markScopeAsSynchronized(_ scope: LoadScope) {
         if scope == .complete {
             hasSynchronizedBrowsingThisLaunch = true
             hasSynchronizedCompleteThisLaunch = true

@@ -2,6 +2,7 @@ import Photos
 import XCTest
 @testable import Snapuary
 
+@MainActor
 final class SnapuaryTests: XCTestCase {
     func testCleanupSummaryCountsProtectedItems() {
         let service = MockScreenshotExpirationService()
@@ -455,6 +456,36 @@ final class SnapuaryTests: XCTestCase {
 
         XCTAssertEqual(viewModel.assets.compactMap(\.libraryIdentifier), ["new-1", "original-1"])
     }
+
+    func testLibraryHomeViewModelSkipsReloadWhenFingerprintIsUnchanged() async throws {
+        let originalAsset = MediaAsset(
+            id: UUID(),
+            libraryIdentifier: "original-1",
+            title: "Original",
+            createdAt: .now.addingTimeInterval(-3_600),
+            addedAt: .now.addingTimeInterval(-3_600),
+            tags: [],
+            kind: .photo,
+            screenshotRule: nil,
+            isProtectedFromCleanup: false
+        )
+        let service = InMemoryPhotoLibraryService(assets: [originalAsset])
+        let viewModel = LibraryHomeViewModel(
+            photoLibraryService: service,
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
+            metadataService: InMemoryMediaAssetMetadataStore(),
+            expirationService: MockScreenshotExpirationService(),
+            cleanupSchedulingService: InMemoryCleanupSchedulingService()
+        )
+
+        await viewModel.loadForBrowsing()
+        let initialPageFetchCount = service.fetchAssetPageCallCount
+
+        await viewModel.handleAppDidBecomeActive()
+
+        XCTAssertEqual(service.fetchAssetPageCallCount, initialPageFetchCount)
+        XCTAssertEqual(viewModel.assets.compactMap(\.libraryIdentifier), ["original-1"])
+    }
 }
 
 actor InMemoryMediaAssetIndexCache: MediaAssetIndexCaching {
@@ -497,6 +528,7 @@ actor InMemoryMediaAssetMetadataStore: MediaAssetMetadataServing {
 
 final class InMemoryPhotoLibraryService: PhotoLibraryServing {
     private var assets: [MediaAsset]
+    private(set) var fetchAssetPageCallCount = 0
 
     init(assets: [MediaAsset]) {
         self.assets = assets
@@ -527,6 +559,7 @@ final class InMemoryPhotoLibraryService: PhotoLibraryServing {
     }
 
     func fetchAssetPage(offset: Int, limit: Int) async throws -> [MediaAsset] {
+        fetchAssetPageCallCount += 1
         guard limit > 0, offset < assets.count else {
             return []
         }

@@ -7,6 +7,7 @@ enum RootTab: Hashable {
     case cleanup
 }
 
+@MainActor
 @Observable
 final class RootTabViewModel {
     var selectedTab: RootTab
