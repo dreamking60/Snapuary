@@ -738,7 +738,7 @@ private struct ScreenshotSlashView: View {
     let onCommitDelete: () async -> Void
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 24) {
             cleanupHeader
 
             if let asset = currentAsset {
@@ -746,7 +746,6 @@ private struct ScreenshotSlashView: View {
                     asset: asset,
                     nextAsset: nextAsset,
                     thumbnailStore: thumbnailStore,
-                    progressLabel: progressLabel,
                     onPreview: { onPreview(asset) },
                     onOpenDetail: { onOpenDetail(asset) },
                     onKeep: {
@@ -813,19 +812,6 @@ private struct ScreenshotSlashView: View {
         return assets[nextIndex]
     }
 
-    private var progressLabel: String {
-        guard !assets.isEmpty else {
-            return L10n.text("cleanup.zero_left", fallback: "0 left")
-        }
-
-        return L10n.text(
-            "cleanup.progress_left",
-            fallback: "%lld / %lld left",
-            currentIndex + 1,
-            assets.count
-        )
-    }
-
     private var emptyStateMessage: String {
         switch reviewMode {
         case .screenshots:
@@ -836,15 +822,11 @@ private struct ScreenshotSlashView: View {
     }
 
     private var cleanupHeader: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 12) {
             cleanupModePicker
 
-            Text(L10n.text("cleanup.preview_hint", fallback: "Tap the photo to preview the original."))
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
             if isRefreshing {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)
                     Text(L10n.text("library.refreshing", fallback: "Refreshing library"))
@@ -880,7 +862,7 @@ private struct ScreenshotSlashView: View {
             }
         }
         .padding(6)
-        .background(.thinMaterial, in: Capsule())
+        .background(Color(.tertiarySystemBackground), in: Capsule())
     }
 
     private func advanceAfterAction() {
@@ -896,7 +878,6 @@ private struct ScreenshotSlashCard: View {
     let asset: MediaAsset
     let nextAsset: MediaAsset?
     let thumbnailStore: PhotoLibraryThumbnailStore
-    let progressLabel: String
     let onPreview: () -> Void
     let onOpenDetail: () -> Void
     let onKeep: () async -> Void
@@ -906,7 +887,7 @@ private struct ScreenshotSlashCard: View {
     @State private var isActing = false
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 20) {
             ZStack {
                 if let nextAsset {
                     ReviewCardFace(
@@ -927,14 +908,14 @@ private struct ScreenshotSlashCard: View {
                 .overlay(alignment: .topLeading) {
                     if dragOffset.width > 24 {
                         slashIndicator
-                            .padding(.top, 64)
+                            .padding(.top, 28)
                             .padding(.leading, 18)
                     }
                 }
                 .overlay(alignment: .topTrailing) {
                     if dragOffset.width < -24 {
                         slashIndicator
-                            .padding(.top, 64)
+                            .padding(.top, 28)
                             .padding(.trailing, 18)
                     }
                 }
@@ -996,65 +977,54 @@ private struct ScreenshotSlashCard: View {
                 }
             }
             .padding(.horizontal, 8)
+
+            if !asset.title.isEmpty {
+                Text(asset.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 
     @ViewBuilder
     private var slashIndicator: some View {
         if dragOffset.width > 24 {
-            swipeStamp(
-                title: L10n.text("cleanup.keep_upper", fallback: "KEEP"),
+            swipeCue(
                 systemImage: "bookmark.fill",
                 tint: .green,
-                rotation: -8
+                emphasis: min(abs(dragOffset.width) / 140, 1)
             )
         } else if dragOffset.width < -24 {
-            swipeStamp(
-                title: L10n.text("cleanup.delete_upper", fallback: "DELETE"),
+            swipeCue(
                 systemImage: "trash.fill",
                 tint: .red,
-                rotation: 8
+                emphasis: min(abs(dragOffset.width) / 140, 1)
             )
         }
     }
 
-    private func swipeStamp(
-        title: String,
+    private func swipeCue(
         systemImage: String,
         tint: Color,
-        rotation: Double
+        emphasis: Double
     ) -> some View {
-        let emphasis = min(abs(dragOffset.width) / 140, 1)
-
-        return Label(title, systemImage: systemImage)
-            .font(.caption.weight(.black))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .stroke(tint.opacity(0.5), lineWidth: 1.5)
-                    }
-                    .background(
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        tint.opacity(0.16),
-                                        Color.white.opacity(0.02)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    )
-            )
-            .shadow(color: tint.opacity(0.18), radius: 14, y: 8)
-            .rotationEffect(.degrees(rotation))
-            .scaleEffect(0.92 + (0.08 * emphasis))
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(tint.opacity(0.95))
+            .frame(width: 34, height: 34)
+        .background(
+            Circle()
+                .fill(.ultraThinMaterial)
+                .overlay {
+                    Circle()
+                        .stroke(Color.white.opacity(0.4), lineWidth: 0.8)
+                }
+        )
+        .shadow(color: Color.black.opacity(0.05), radius: 8, y: 4)
+        .opacity(0.58 + (0.2 * emphasis))
+        .scaleEffect(0.94 + (0.05 * emphasis))
+        .offset(x: dragOffset.width > 0 ? max(-6 * emphasis, -6) : min(6 * emphasis, 6))
     }
 
     private func performKeep() async {
@@ -1097,25 +1067,32 @@ private struct ReviewCardFace: View {
                     .fill(Color.black.opacity(overlayOpacity))
             }
             .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(asset.title)
-                        .font(.title3.weight(.semibold))
-                    HStack(spacing: 8) {
-                        if let expirationDate = asset.expirationDate {
-                            Label(
-                                L10n.text("asset.expires_on", fallback: "Expires %@", expirationDate.formatted(date: .abbreviated, time: .omitted)),
-                                systemImage: "clock"
-                            )
-                        }
-                        if !asset.tags.isEmpty {
-                            Label(tagLabel, systemImage: "tag")
-                        }
+                HStack(spacing: 8) {
+                    metadataChip(
+                        title: asset.kind.displayName,
+                        systemImage: asset.kind == .photo ? "photo" : "camera.viewfinder"
+                    )
+
+                    if asset.isProtectedFromCleanup {
+                        metadataChip(
+                            title: L10n.text("cleanup.keep", fallback: "Keep"),
+                            systemImage: "bookmark.fill"
+                        )
+                    } else if !asset.tags.isEmpty {
+                        metadataChip(title: tagLabel, systemImage: "tag.fill")
                     }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 }
-                .padding(22)
+                .padding(18)
             }
+    }
+
+    private func metadataChip(title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: Capsule())
     }
 }
 
@@ -1210,22 +1187,21 @@ private struct ActionOrbButton: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(tint)
-                    .frame(width: 58, height: 58)
-                    .background(
-                        Circle()
-                            .fill(Color(.secondarySystemBackground))
-                    )
-                    .shadow(color: Color.black.opacity(0.08), radius: 12, y: 8)
 
                 Text(title)
-                    .font(.footnote.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(tint)
             }
             .frame(maxWidth: .infinity)
+            .frame(height: 54)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(.secondarySystemBackground))
+            )
         }
         .buttonStyle(.plain)
         .opacity(isEnabled ? 1 : 0.45)
