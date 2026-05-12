@@ -1,7 +1,7 @@
 "settings.language.system" = "跟随系统";
 "tab.library" = "图库";
 "tab.tags" = "标签";
-"tab.cleanup" = "清理";
+"tab.cleanup" = "轨道";
 "privacy.recent_signals" = "最近风险信号";
 "privacy.detection_strategy" = "检测策略";
 "privacy.strategy_body" = "先使用基于 OCR 的水印信号检测，再逐步加入针对内部标识符的自定义规则。";
@@ -58,6 +58,7 @@
 "cleanup.progress_left" = "剩余 %lld / %lld";
 "cleanup.empty_screenshots" = "没有等待处理的截图。";
 "cleanup.empty_photos" = "没有等待处理的照片。";
+"orbit.hint" = "向下拖动可将照片放入轨道";
 "cleanup.preview_hint" = "点按照片可查看原图。";
 "library.refreshing" = "正在刷新图库";
 "cleanup.queue" = "加入队列";

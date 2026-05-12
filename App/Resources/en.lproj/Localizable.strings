@@ -1,7 +1,7 @@
 "settings.language.system" = "System Default";
 "tab.library" = "Library";
 "tab.tags" = "Tags";
-"tab.cleanup" = "Cleanup";
+"tab.cleanup" = "Orbit";
 "privacy.recent_signals" = "Recent Risk Signals";
 "privacy.detection_strategy" = "Detection Strategy";
 "privacy.strategy_body" = "Start with OCR-based watermark signal detection, then add custom rules for internal identifiers.";
@@ -58,6 +58,7 @@
 "cleanup.progress_left" = "%lld / %lld left";
 "cleanup.empty_screenshots" = "No screenshots are waiting for review.";
 "cleanup.empty_photos" = "No photos are waiting for review.";
+"orbit.hint" = "Drag down to place photos into Orbit";
 "cleanup.preview_hint" = "Tap the photo to preview the original.";
 "library.refreshing" = "Refreshing library";
 "cleanup.queue" = "Queue";

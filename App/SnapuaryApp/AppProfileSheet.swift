@@ -60,9 +60,9 @@ struct AppProfileSheet: View {
                         L10n.text("settings.launch_tab.label", fallback: "Launch Tab"),
                         selection: $settings.preferredLaunchTab
                     ) {
-                        Text(L10n.text("tab.library", fallback: "Library")).tag(RootTab.library)
                         Text(L10n.text("tab.tags", fallback: "Tags")).tag(RootTab.tags)
-                        Text(L10n.text("tab.cleanup", fallback: "Cleanup")).tag(RootTab.cleanup)
+                        Text(L10n.text("tab.cleanup", fallback: "Orbit")).tag(RootTab.cleanup)
+                        Text(L10n.text("tab.library", fallback: "Library")).tag(RootTab.library)
                     }
 
                     Picker(

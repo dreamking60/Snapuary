@@ -165,6 +165,7 @@ final class SnapuaryTests: XCTestCase {
             photoLibraryService: MockPhotoLibraryService(),
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
+            tagCatalogStore: InMemoryTagCatalogStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -216,6 +217,7 @@ final class SnapuaryTests: XCTestCase {
             photoLibraryService: photoLibraryService,
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
+            tagCatalogStore: InMemoryTagCatalogStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -227,12 +229,36 @@ final class SnapuaryTests: XCTestCase {
         XCTAssertEqual(library.first?.usageCount, 2)
     }
 
+    func testTagLibraryIncludesMetadataBackedTagsBeforeAssetPageLoadsThem() async throws {
+        let metadataStore = InMemoryMediaAssetMetadataStore(records: [
+            "remote-tagged-photo": MediaAssetMetadataRecord(
+                isImportedScreenshotLike: false,
+                tags: [MediaTag(id: UUID(), name: "Archive", colorHex: "#8899AA")],
+                screenshotRule: nil,
+                isProtectedFromCleanup: false
+            )
+        ])
+        let viewModel = LibraryHomeViewModel(
+            photoLibraryService: InMemoryPhotoLibraryService(assets: []),
+            assetIndexCache: InMemoryMediaAssetIndexCache(),
+            metadataService: metadataStore,
+            tagCatalogStore: InMemoryTagCatalogStore(),
+            expirationService: MockScreenshotExpirationService(),
+            cleanupSchedulingService: InMemoryCleanupSchedulingService()
+        )
+
+        await viewModel.loadForBrowsing()
+
+        XCTAssertTrue(viewModel.tagLibrary.contains(where: { $0.normalizedName == "archive" }))
+    }
+
     func testLibraryHomeViewModelCanBatchApplyGlobalTags() async throws {
         let metadataStore = InMemoryMediaAssetMetadataStore()
         let viewModel = LibraryHomeViewModel(
             photoLibraryService: MockPhotoLibraryService(),
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
+            tagCatalogStore: InMemoryTagCatalogStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -331,6 +357,7 @@ final class SnapuaryTests: XCTestCase {
             photoLibraryService: photoLibraryService,
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
+            tagCatalogStore: InMemoryTagCatalogStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -444,6 +471,7 @@ final class SnapuaryTests: XCTestCase {
             photoLibraryService: service,
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
+            tagCatalogStore: InMemoryTagCatalogStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -474,6 +502,7 @@ final class SnapuaryTests: XCTestCase {
             photoLibraryService: service,
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
+            tagCatalogStore: InMemoryTagCatalogStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -523,6 +552,22 @@ actor InMemoryMediaAssetMetadataStore: MediaAssetMetadataServing {
         for libraryIdentifier in libraryIdentifiers {
             records.removeValue(forKey: libraryIdentifier)
         }
+    }
+}
+
+actor InMemoryTagCatalogStore: TagCatalogServing {
+    private var entries: [TagLibraryEntry]
+
+    init(entries: [TagLibraryEntry] = []) {
+        self.entries = entries
+    }
+
+    func loadEntries() async throws -> [TagLibraryEntry] {
+        entries
+    }
+
+    func saveEntries(_ entries: [TagLibraryEntry]) async throws {
+        self.entries = entries
     }
 }
 

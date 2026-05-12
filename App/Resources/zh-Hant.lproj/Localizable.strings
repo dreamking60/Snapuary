@@ -1,7 +1,7 @@
 "settings.language.system" = "跟隨系統";
 "tab.library" = "圖庫";
 "tab.tags" = "標籤";
-"tab.cleanup" = "清理";
+"tab.cleanup" = "軌道";
 "privacy.recent_signals" = "近期風險訊號";
 "privacy.detection_strategy" = "偵測策略";
 "privacy.strategy_body" = "先使用 OCR 型浮水印訊號偵測，再逐步加入針對內部識別碼的自訂規則。";
@@ -58,6 +58,7 @@
 "cleanup.progress_left" = "剩餘 %lld / %lld";
 "cleanup.empty_screenshots" = "沒有等待審核的截圖。";
 "cleanup.empty_photos" = "沒有等待審核的照片。";
+"orbit.hint" = "向下拖曳可將照片放入軌道";
 "cleanup.preview_hint" = "點按照片即可檢視原圖。";
 "library.refreshing" = "正在重新整理圖庫";
 "cleanup.queue" = "加入佇列";

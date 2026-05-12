@@ -37,7 +37,7 @@ enum CleanupReviewMode: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
-struct TagLibraryEntry: Identifiable, Hashable {
+struct TagLibraryEntry: Codable, Identifiable, Hashable {
     let id: String
     let name: String
     let normalizedName: String
@@ -57,8 +57,10 @@ final class LibraryHomeViewModel {
     let thumbnailStore: PhotoLibraryThumbnailStore
     private let assetIndexCache: MediaAssetIndexCaching
     private let metadataService: MediaAssetMetadataServing
+    private let tagCatalogStore: TagCatalogServing
     private let expirationService: ScreenshotExpirationServing
     private let cleanupSchedulingService: CleanupSchedulingServing
+    private let autoTagSuggestionService: AutoTagSuggesting
     private let browsingPageSize = 120
     private let fullLoadPageSize = 240
     private let reviewDeletionBatchLimit = 50
@@ -97,11 +99,14 @@ final class LibraryHomeViewModel {
     private var hasPromptedForCleanupThisSession = false
     private var hasLoadedCompleteLibrary = false
     private var hasHydratedCache = false
+    private var hasHydratedTagSources = false
     private var hasSynchronizedBrowsingThisLaunch = false
     private var hasSynchronizedCompleteThisLaunch = false
     private var cachedFingerprint: PhotoLibraryFingerprint?
     private var currentOffset = 0
     private var cleanupSyncTask: Task<Void, Never>?
+    private var savedTagCatalogEntries: [TagLibraryEntry] = []
+    private var metadataTagEntries: [TagLibraryEntry] = []
     private let photoLibraryChangeObserver = PhotoLibraryChangeObserverProxy()
 
     init(
@@ -109,15 +114,19 @@ final class LibraryHomeViewModel {
         thumbnailStore: PhotoLibraryThumbnailStore = .empty,
         assetIndexCache: MediaAssetIndexCaching,
         metadataService: MediaAssetMetadataServing,
+        tagCatalogStore: TagCatalogServing,
         expirationService: ScreenshotExpirationServing,
-        cleanupSchedulingService: CleanupSchedulingServing
+        cleanupSchedulingService: CleanupSchedulingServing,
+        autoTagSuggestionService: AutoTagSuggesting = TemplateAutoTagSuggestionService()
     ) {
         self.photoLibraryService = photoLibraryService
         self.thumbnailStore = thumbnailStore
         self.assetIndexCache = assetIndexCache
         self.metadataService = metadataService
+        self.tagCatalogStore = tagCatalogStore
         self.expirationService = expirationService
         self.cleanupSchedulingService = cleanupSchedulingService
+        self.autoTagSuggestionService = autoTagSuggestionService
         self.authorizationStatus = photoLibraryService.authorizationStatus()
         self.totalCleanupDeletedCount = UserDefaults.standard.integer(forKey: cleanupDeletionCountKey)
         photoLibraryChangeObserver.onChange = { [weak self] in
@@ -239,33 +248,15 @@ final class LibraryHomeViewModel {
     }
 
     var tagLibrary: [TagLibraryEntry] {
-        var summary: [String: (name: String, colorHex: String, usageCount: Int)] = [:]
+        mergeTagEntries([
+            derivedTagEntries(from: assets),
+            metadataTagEntries,
+            savedTagCatalogEntries
+        ])
+    }
 
-        for tag in assets.flatMap(\.tags) {
-            let key = tag.normalizedName
-            if let current = summary[key] {
-                summary[key] = (current.name, current.colorHex, current.usageCount + 1)
-            } else {
-                summary[key] = (tag.name, tag.colorHex, 1)
-            }
-        }
-
-        return summary
-            .map { key, value in
-                TagLibraryEntry(
-                    id: key,
-                    name: value.name,
-                    normalizedName: key,
-                    colorHex: value.colorHex,
-                    usageCount: value.usageCount
-                )
-            }
-            .sorted {
-                if $0.usageCount == $1.usageCount {
-                    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-                }
-                return $0.usageCount > $1.usageCount
-            }
+    func autoTagSuggestions(for asset: MediaAsset) async -> [AutoTagSuggestion] {
+        await autoTagSuggestionService.suggestions(for: asset, within: assets)
     }
 
     var filteredAssets: [MediaAsset] {
@@ -411,6 +402,7 @@ final class LibraryHomeViewModel {
         assets[index].tags.append(
             MediaTag(id: UUID(), name: trimmedName, colorHex: colorHex)
         )
+        await saveTagTemplate(name: trimmedName, colorHex: colorHex)
         await persistMetadata(for: assets[index])
     }
 
@@ -431,6 +423,9 @@ final class LibraryHomeViewModel {
         }
 
         assets[index].tags.append(contentsOf: newTags)
+        for entry in tags {
+            await saveTagTemplate(name: entry.name, colorHex: entry.colorHex)
+        }
         await persistMetadata(for: assets[index])
     }
 
@@ -501,6 +496,7 @@ final class LibraryHomeViewModel {
         for index in updatedIndexes {
             await persistMetadata(for: assets[index])
         }
+        await renameSavedTagEntry(from: oldNormalizedName, to: trimmedName, colorHex: tagEntry.colorHex)
     }
 
     func deleteTag(_ tagEntry: TagLibraryEntry) async {
@@ -522,6 +518,7 @@ final class LibraryHomeViewModel {
         for index in updatedIndexes {
             await persistMetadata(for: assets[index])
         }
+        await removeSavedTagEntry(normalizedName: normalizedName)
     }
 
     func mergeTag(_ source: TagLibraryEntry, into destination: TagLibraryEntry) async {
@@ -570,6 +567,18 @@ final class LibraryHomeViewModel {
         for index in updatedIndexes {
             await persistMetadata(for: assets[index])
         }
+        await removeSavedTagEntry(normalizedName: source.normalizedName)
+        await saveTagTemplate(name: destination.name, colorHex: destination.colorHex)
+    }
+
+    func createTagTemplate(name: String, colorHex: String = "#4F7CAC") async -> TagLibraryEntry? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            return nil
+        }
+
+        await saveTagTemplate(name: trimmedName, colorHex: colorHex)
+        return tagLibrary.first(where: { $0.normalizedName == trimmedName.lowercased() })
     }
 
     func runCleanupNow() async {
@@ -596,6 +605,7 @@ final class LibraryHomeViewModel {
         do {
             try await photoLibraryService.deleteAssets(withLocalIdentifiers: identifiers)
             try await metadataService.removeMetadata(for: identifiers)
+            await refreshTagSources()
             lastCleanupResult = CleanupExecutionResult(
                 deletedCount: candidates.count,
                 deletedAssetTitles: candidates.map(\.title)
@@ -618,6 +628,7 @@ final class LibraryHomeViewModel {
         do {
             try await photoLibraryService.deleteAssets(withLocalIdentifiers: [libraryIdentifier])
             try await metadataService.removeMetadata(for: [libraryIdentifier])
+            await refreshTagSources()
 
             if assets.contains(where: { $0.id == asset.id }) {
                 removeAssetFromLocalState(asset)
@@ -676,6 +687,7 @@ final class LibraryHomeViewModel {
         do {
             try await photoLibraryService.deleteAssets(withLocalIdentifiers: identifiers)
             try await metadataService.removeMetadata(for: identifiers)
+            await refreshTagSources()
 
             pendingDeletionAssets.removeAll()
             lastCleanupResult = CleanupExecutionResult(
@@ -875,6 +887,7 @@ final class LibraryHomeViewModel {
         }
 
         hasHydratedCache = true
+        await hydrateTagSourcesIfNeeded()
 
         do {
             guard let snapshot = try await assetIndexCache.loadSnapshot() else {
@@ -927,6 +940,7 @@ final class LibraryHomeViewModel {
 
         do {
             try await metadataService.saveMetadata(record, for: libraryIdentifier)
+            await refreshTagSources()
             recalculateCleanupState()
             await persistSnapshot()
         } catch {
@@ -972,6 +986,134 @@ final class LibraryHomeViewModel {
         cleanupSummary = expirationService.upcomingCleanupSummary(for: cleanupScopedAssets)
         cleanupCandidates = expirationService.cleanupCandidates(from: cleanupScopedAssets, now: .now)
         updateCleanupPromptState()
+    }
+
+    private func hydrateTagSourcesIfNeeded() async {
+        guard !hasHydratedTagSources else {
+            return
+        }
+
+        hasHydratedTagSources = true
+        await refreshTagSources()
+    }
+
+    private func refreshTagSources() async {
+        do {
+            let metadata = try await metadataService.fetchAllMetadata()
+            metadataTagEntries = derivedTagEntries(from: metadata.values.flatMap(\.tags))
+        } catch {
+            metadataTagEntries = []
+        }
+
+        do {
+            savedTagCatalogEntries = try await tagCatalogStore.loadEntries()
+        } catch {
+            savedTagCatalogEntries = []
+        }
+    }
+
+    private func saveTagTemplate(name: String, colorHex: String) async {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedName.isEmpty else {
+            return
+        }
+
+        let entry = TagLibraryEntry(
+            id: normalizedName,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            normalizedName: normalizedName,
+            colorHex: colorHex,
+            usageCount: 0
+        )
+        savedTagCatalogEntries = mergeTagEntries([savedTagCatalogEntries, [entry]]).map {
+            TagLibraryEntry(
+                id: $0.normalizedName,
+                name: $0.name,
+                normalizedName: $0.normalizedName,
+                colorHex: $0.colorHex,
+                usageCount: 0
+            )
+        }
+
+        do {
+            try await tagCatalogStore.saveEntries(savedTagCatalogEntries)
+        } catch {
+            authorizationErrorMessage = L10n.text("error.save_metadata", fallback: "Failed to save local asset metadata.")
+        }
+    }
+
+    private func renameSavedTagEntry(from normalizedName: String, to newName: String, colorHex: String) async {
+        savedTagCatalogEntries.removeAll { $0.normalizedName == normalizedName }
+        await saveTagTemplate(name: newName, colorHex: colorHex)
+    }
+
+    private func removeSavedTagEntry(normalizedName: String) async {
+        savedTagCatalogEntries.removeAll { $0.normalizedName == normalizedName }
+
+        do {
+            try await tagCatalogStore.saveEntries(savedTagCatalogEntries)
+        } catch {
+            authorizationErrorMessage = L10n.text("error.save_metadata", fallback: "Failed to save local asset metadata.")
+        }
+    }
+
+    private func derivedTagEntries(from assets: [MediaAsset]) -> [TagLibraryEntry] {
+        derivedTagEntries(from: assets.flatMap(\.tags))
+    }
+
+    private func derivedTagEntries(from tags: [MediaTag]) -> [TagLibraryEntry] {
+        var summary: [String: (name: String, colorHex: String, usageCount: Int)] = [:]
+
+        for tag in tags {
+            if let current = summary[tag.normalizedName] {
+                summary[tag.normalizedName] = (current.name, current.colorHex, current.usageCount + 1)
+            } else {
+                summary[tag.normalizedName] = (tag.name, tag.colorHex, 1)
+            }
+        }
+
+        return summary.map { key, value in
+            TagLibraryEntry(
+                id: key,
+                name: value.name,
+                normalizedName: key,
+                colorHex: value.colorHex,
+                usageCount: value.usageCount
+            )
+        }
+    }
+
+    private func mergeTagEntries(_ groups: [[TagLibraryEntry]]) -> [TagLibraryEntry] {
+        var summary: [String: (name: String, colorHex: String, usageCount: Int)] = [:]
+
+        for entry in groups.flatMap({ $0 }) {
+            if let current = summary[entry.normalizedName] {
+                summary[entry.normalizedName] = (
+                    current.name.count >= entry.name.count ? current.name : entry.name,
+                    current.colorHex.isEmpty ? entry.colorHex : current.colorHex,
+                    current.usageCount + entry.usageCount
+                )
+            } else {
+                summary[entry.normalizedName] = (entry.name, entry.colorHex, entry.usageCount)
+            }
+        }
+
+        return summary
+            .map { key, value in
+                TagLibraryEntry(
+                    id: key,
+                    name: value.name,
+                    normalizedName: key,
+                    colorHex: value.colorHex,
+                    usageCount: value.usageCount
+                )
+            }
+            .sorted {
+                if $0.usageCount == $1.usageCount {
+                    return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+                return $0.usageCount > $1.usageCount
+            }
     }
 
     private func removeAssetFromLocalState(_ asset: MediaAsset) {

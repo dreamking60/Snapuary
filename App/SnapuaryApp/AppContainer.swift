@@ -6,12 +6,15 @@ struct AppContainer {
     let thumbnailStore: PhotoLibraryThumbnailStore
     let assetIndexCache: MediaAssetIndexCaching
     let metadataService: MediaAssetMetadataServing
+    let tagCatalogStore: TagCatalogServing
     let expirationService: ScreenshotExpirationServing
     let cleanupSchedulingService: CleanupSchedulingServing
+    let autoTagSuggestionService: AutoTagSuggesting
     let watermarkInspector: WatermarkInspecting
 
     static let metadataService = FileBackedMediaAssetMetadataStore()
     static let assetIndexCache = FileBackedMediaAssetIndexCache()
+    static let tagCatalogStore = FileBackedTagCatalogStore()
     static let cleanupSchedulingService = UserNotificationCleanupScheduler()
     static let thumbnailStore = PhotoLibraryThumbnailStore()
     static let settingsStore = AppSettingsStore()
@@ -25,8 +28,10 @@ struct AppContainer {
         thumbnailStore: thumbnailStore,
         assetIndexCache: assetIndexCache,
         metadataService: metadataService,
+        tagCatalogStore: tagCatalogStore,
         expirationService: MockScreenshotExpirationService(),
         cleanupSchedulingService: cleanupSchedulingService,
+        autoTagSuggestionService: TemplateAutoTagSuggestionService(),
         watermarkInspector: MockWatermarkInspector()
     )
 }

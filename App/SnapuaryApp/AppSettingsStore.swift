@@ -78,7 +78,7 @@ final class AppSettingsStore {
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         self.preferredLanguage = AppLanguageOption(rawValue: userDefaults.string(forKey: AppLanguageOption.userDefaultsKey) ?? "") ?? .system
-        self.preferredLaunchTab = RootTab(storageValue: userDefaults.string(forKey: Keys.preferredLaunchTab)) ?? .library
+        self.preferredLaunchTab = RootTab(storageValue: userDefaults.string(forKey: Keys.preferredLaunchTab)) ?? .cleanup
         self.preferredCleanupReviewMode = CleanupReviewMode(rawValue: userDefaults.string(forKey: Keys.preferredCleanupReviewMode) ?? "") ?? .screenshots
     }
 

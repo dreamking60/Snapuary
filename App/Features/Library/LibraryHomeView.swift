@@ -110,6 +110,7 @@ struct LibraryHomeView: View {
                 AssetEditorSheet(
                     asset: asset,
                     tagLibrary: viewModel.tagLibrary,
+                    tagSuggestions: { await viewModel.autoTagSuggestions(for: asset) },
                     onRefresh: {
                         await viewModel.loadForBrowsing()
                         selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
@@ -149,6 +150,10 @@ struct CleanupHomeView: View {
     @State private var selectedAsset: MediaAsset?
     @State private var previewAsset: MediaAsset?
     @State private var reviewIndex = 0
+    @State private var orbitedAssets: [MediaAsset] = []
+    @State private var selectedOrbitTagID: String?
+    @State private var isShowingCreateOrbitTag = false
+    @State private var draftOrbitTagName = ""
 
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
@@ -179,6 +184,9 @@ struct CleanupHomeView: View {
                         pendingDeletionLimit: viewModel.pendingDeletionLimit,
                         pendingDeletionPreviewAsset: viewModel.lastPendingDeletionAsset,
                         isCommittingDeletion: viewModel.isRunningCleanup,
+                        orbitTags: viewModel.tagLibrary,
+                        selectedOrbitTagID: $selectedOrbitTagID,
+                        orbitedAssets: orbitedAssets,
                         onOpenDetail: { asset in
                             selectedAsset = asset
                         },
@@ -187,6 +195,17 @@ struct CleanupHomeView: View {
                         },
                         onKeep: { asset in
                             await viewModel.protectFromCleanup(asset)
+                            clampReviewIndex()
+                        },
+                        onOrbit: { asset in
+                            if let selectedTag = viewModel.tagLibrary.first(where: { $0.id == selectedOrbitTagID }) {
+                                await viewModel.addTags([selectedTag], to: asset)
+                            }
+                            await viewModel.protectFromCleanup(asset)
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
+                                orbitedAssets.removeAll { $0.gridIdentifier == asset.gridIdentifier }
+                                orbitedAssets.insert(asset, at: 0)
+                            }
                             clampReviewIndex()
                         },
                         onDelete: { asset in
@@ -202,6 +221,8 @@ struct CleanupHomeView: View {
                     } onCommitDelete: {
                         _ = await viewModel.commitPendingDeletions()
                         clampReviewIndex()
+                    } onCreateTag: {
+                        isShowingCreateOrbitTag = true
                     }
                     .padding()
                     .id(languageRefreshKey)
@@ -217,6 +238,18 @@ struct CleanupHomeView: View {
                     await viewModel.prepareCleanupData()
                 } else {
                     await viewModel.prepareCleanupData()
+                }
+                if selectedOrbitTagID == nil {
+                    selectedOrbitTagID = viewModel.tagLibrary.first?.id
+                }
+            }
+            .onChange(of: viewModel.tagLibrary.map(\.id)) { _, ids in
+                guard let first = ids.first else {
+                    selectedOrbitTagID = nil
+                    return
+                }
+                if selectedOrbitTagID == nil || !ids.contains(selectedOrbitTagID ?? "") {
+                    selectedOrbitTagID = first
                 }
             }
             .alert(
@@ -236,10 +269,31 @@ struct CleanupHomeView: View {
             } message: {
                 Text(viewModel.cleanupReviewMessage ?? "")
             }
+            .alert(L10n.text("tags.create_tag", fallback: "Create Tag"), isPresented: $isShowingCreateOrbitTag) {
+                TextField(L10n.text("tags.new_tag", fallback: "New tag"), text: $draftOrbitTagName)
+                Button(L10n.text("common.cancel", fallback: "Cancel"), role: .cancel) {
+                    draftOrbitTagName = ""
+                }
+                Button(L10n.text("common.save", fallback: "Save")) {
+                    Task {
+                        let pendingName = draftOrbitTagName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !pendingName.isEmpty else {
+                            return
+                        }
+                        let entry = await viewModel.createTagTemplate(
+                            name: pendingName,
+                            colorHex: TagColorPreset.ocean.hex
+                        )
+                        selectedOrbitTagID = entry?.id
+                        draftOrbitTagName = ""
+                    }
+                }
+            }
             .sheet(item: $selectedAsset) { asset in
                 AssetEditorSheet(
                     asset: asset,
                     tagLibrary: viewModel.tagLibrary,
+                    tagSuggestions: { await viewModel.autoTagSuggestions(for: asset) },
                     onRefresh: {
                         await viewModel.load()
                         selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
@@ -469,6 +523,7 @@ private struct TagDetailView: View {
             AssetEditorSheet(
                 asset: asset,
                 tagLibrary: viewModel.tagLibrary,
+                tagSuggestions: { await viewModel.autoTagSuggestions(for: asset) },
                 onRefresh: {
                     await viewModel.load()
                     selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
@@ -507,6 +562,7 @@ private struct TagDetailView: View {
 
         return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
     }
+
 }
 
 private struct LibraryAuthorizationView: View {
@@ -730,12 +786,17 @@ private struct ScreenshotSlashView: View {
     let pendingDeletionLimit: Int
     let pendingDeletionPreviewAsset: MediaAsset?
     let isCommittingDeletion: Bool
+    let orbitTags: [TagLibraryEntry]
+    @Binding var selectedOrbitTagID: String?
+    let orbitedAssets: [MediaAsset]
     let onOpenDetail: (MediaAsset) -> Void
     let onPreview: (MediaAsset) -> Void
     let onKeep: (MediaAsset) async -> Void
+    let onOrbit: (MediaAsset) async -> Void
     let onDelete: (MediaAsset) async -> Bool
     let onUndoDelete: () -> Void
     let onCommitDelete: () async -> Void
+    let onCreateTag: () -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -746,10 +807,17 @@ private struct ScreenshotSlashView: View {
                     asset: asset,
                     nextAsset: nextAsset,
                     thumbnailStore: thumbnailStore,
+                    orbitTags: orbitTags,
+                    selectedOrbitTagID: $selectedOrbitTagID,
+                    orbitedAssets: orbitedAssets,
                     onPreview: { onPreview(asset) },
                     onOpenDetail: { onOpenDetail(asset) },
                     onKeep: {
                         await onKeep(asset)
+                        advanceAfterAction()
+                    },
+                    onOrbit: {
+                        await onOrbit(asset)
                         advanceAfterAction()
                     },
                     onDelete: {
@@ -757,7 +825,8 @@ private struct ScreenshotSlashView: View {
                         if deleted {
                             advanceAfterAction()
                         }
-                    }
+                    },
+                    onCreateTag: onCreateTag
                 )
                 .id(asset.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -875,78 +944,133 @@ private struct ScreenshotSlashView: View {
 }
 
 private struct ScreenshotSlashCard: View {
+    private enum DragAxisLock {
+        case undecided
+        case horizontal
+        case vertical
+    }
+
     let asset: MediaAsset
     let nextAsset: MediaAsset?
     let thumbnailStore: PhotoLibraryThumbnailStore
+    let orbitTags: [TagLibraryEntry]
+    @Binding var selectedOrbitTagID: String?
+    let orbitedAssets: [MediaAsset]
     let onPreview: () -> Void
     let onOpenDetail: () -> Void
     let onKeep: () async -> Void
+    let onOrbit: () async -> Void
     let onDelete: () async -> Void
+    let onCreateTag: () -> Void
 
     @State private var dragOffset: CGSize = .zero
     @State private var isActing = false
+    @State private var dragAxisLock: DragAxisLock = .undecided
 
     var body: some View {
         VStack(spacing: 20) {
-            ZStack {
-                if let nextAsset {
+            GeometryReader { geometry in
+                let activeHorizontalOffset = dragAxisLock == .horizontal ? dragOffset.width : 0
+                let activeVerticalOffset = dragAxisLock == .vertical ? max(dragOffset.height, 0) : 0
+                let orbitProgress = min(max(activeVerticalOffset / 180, 0), 1)
+                let targetSize: CGFloat = 58
+                let baseHeight: CGFloat = 440
+                let baseWidth = max(min(geometry.size.width, 380), targetSize)
+                let cardWidth = baseWidth - ((baseWidth - targetSize) * orbitProgress)
+                let cardHeight = baseHeight - ((baseHeight - targetSize) * orbitProgress)
+                let cardCornerRadius = 28 + ((targetSize / 2 - 28) * orbitProgress)
+
+                ZStack {
+                    if let nextAsset {
+                        ReviewCardFace(
+                            asset: nextAsset,
+                            thumbnailStore: thumbnailStore,
+                            overlayOpacity: 0.18
+                        )
+                        .scaleEffect(0.94)
+                        .opacity(1)
+                        .offset(y: 18)
+                    }
+
                     ReviewCardFace(
-                        asset: nextAsset,
+                        asset: asset,
                         thumbnailStore: thumbnailStore,
-                        overlayOpacity: 0.18
+                        overlayOpacity: 0
                     )
-                    .scaleEffect(0.94)
-                    .offset(y: 18)
-                }
-
-                ReviewCardFace(
-                    asset: asset,
-                    thumbnailStore: thumbnailStore,
-                    overlayOpacity: 0
-                )
-                .onTapGesture(perform: onPreview)
-                .overlay(alignment: .topLeading) {
-                    if dragOffset.width > 24 {
-                        slashIndicator
-                            .padding(.top, 28)
-                            .padding(.leading, 18)
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if dragOffset.width < -24 {
-                        slashIndicator
-                            .padding(.top, 28)
-                            .padding(.trailing, 18)
-                    }
-                }
-            }
-            .offset(x: dragOffset.width, y: 0)
-            .rotationEffect(.degrees(Double(dragOffset.width / 18)))
-            .shadow(color: Color.black.opacity(0.14), radius: 30, y: 22)
-            .gesture(
-                DragGesture(minimumDistance: 12)
-                    .onChanged { value in
-                        guard !isActing else {
-                            return
+                    .frame(width: cardWidth, height: cardHeight)
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+                    )
+                    .onTapGesture(perform: onPreview)
+                    .overlay(alignment: .topLeading) {
+                        if dragAxisLock == .horizontal, activeHorizontalOffset > 24 {
+                            slashIndicator
+                                .padding(.top, 28)
+                                .padding(.leading, 18)
                         }
-                        dragOffset = value.translation
                     }
-                    .onEnded { value in
-                        guard !isActing else {
-                            return
+                    .overlay(alignment: .topTrailing) {
+                        if dragAxisLock == .horizontal, activeHorizontalOffset < -24 {
+                            slashIndicator
+                                .padding(.top, 28)
+                                .padding(.trailing, 18)
                         }
-
-                        let horizontal = value.translation.width
-                        if horizontal > 120 {
-                            Task { await performKeep() }
-                        } else if horizontal < -120 {
-                            Task { await performDelete() }
-                        } else {
-                            withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
-                                dragOffset = .zero
+                    }
+                    .overlay(alignment: .bottom) {
+                        if dragAxisLock == .vertical, activeVerticalOffset > 24 {
+                            orbitCue(emphasis: min(activeVerticalOffset / 160, 1))
+                                .padding(.bottom, 22)
+                        }
+                    }
+                    .offset(
+                        x: activeHorizontalOffset,
+                        y: dragAxisLock == .vertical ? activeVerticalOffset * 0.42 : 0
+                    )
+                    .rotationEffect(
+                        .degrees(
+                            dragAxisLock == .horizontal
+                                ? Double(activeHorizontalOffset / 18) * (1 - orbitProgress)
+                                : 0
+                        )
+                    )
+                    .shadow(color: Color.black.opacity(0.14), radius: 30, y: 22)
+                    .gesture(
+                        DragGesture(minimumDistance: 12)
+                            .onChanged { value in
+                                guard !isActing else {
+                                    return
+                                }
+                                updateDragState(with: value.translation)
                             }
-                        }
-                    }
+                            .onEnded { value in
+                                guard !isActing else {
+                                    return
+                                }
+
+                                let horizontal = dragAxisLock == .horizontal ? value.translation.width : 0
+                                let vertical = dragAxisLock == .vertical ? value.translation.height : 0
+                                if dragAxisLock == .vertical, vertical > 130 {
+                                    Task { await performOrbit() }
+                                } else if dragAxisLock == .horizontal, horizontal > 120 {
+                                    Task { await performKeep() }
+                                } else if dragAxisLock == .horizontal, horizontal < -120 {
+                                    Task { await performDelete() }
+                                } else {
+                                    resetDragOffset()
+                                }
+                            }
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .frame(height: 470)
+
+            OrbitRailView(
+                tags: orbitTags,
+                selectedTagID: $selectedOrbitTagID,
+                assets: orbitedAssets,
+                thumbnailStore: thumbnailStore,
+                onCreateTag: onCreateTag
             )
 
             HStack(spacing: 16) {
@@ -1027,6 +1151,21 @@ private struct ScreenshotSlashCard: View {
         .offset(x: dragOffset.width > 0 ? max(-6 * emphasis, -6) : min(6 * emphasis, 6))
     }
 
+    private func orbitCue(emphasis: Double) -> some View {
+        Image(systemName: "arrow.down.circle.fill")
+            .font(.system(size: 22, weight: .semibold))
+            .foregroundStyle(Color.accentColor.opacity(0.9))
+            .frame(width: 42, height: 42)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay {
+                Circle()
+                    .stroke(Color.white.opacity(0.35), lineWidth: 0.8)
+            }
+            .shadow(color: Color.black.opacity(0.06), radius: 10, y: 6)
+            .opacity(0.56 + (0.24 * emphasis))
+            .scaleEffect(0.96 + (0.06 * emphasis))
+    }
+
     private func performKeep() async {
         guard !isActing else {
             return
@@ -1034,7 +1173,7 @@ private struct ScreenshotSlashCard: View {
 
         isActing = true
         await onKeep()
-        dragOffset = .zero
+        resetDragOffset(animated: false)
         isActing = false
     }
 
@@ -1045,8 +1184,163 @@ private struct ScreenshotSlashCard: View {
 
         isActing = true
         await onDelete()
-        dragOffset = .zero
+        resetDragOffset(animated: false)
         isActing = false
+    }
+
+    private func performOrbit() async {
+        guard !isActing else {
+            return
+        }
+
+        isActing = true
+        await onOrbit()
+        resetDragOffset(animated: false)
+        isActing = false
+    }
+
+    private func updateDragState(with translation: CGSize) {
+        if dragAxisLock == .undecided {
+            let horizontal = abs(translation.width)
+            let vertical = max(translation.height, 0)
+            let lockThreshold: CGFloat = 20
+
+            if horizontal > lockThreshold || vertical > lockThreshold {
+                if vertical > horizontal * 1.15 {
+                    dragAxisLock = .vertical
+                } else if horizontal > vertical * 1.15 {
+                    dragAxisLock = .horizontal
+                }
+            }
+        }
+
+        switch dragAxisLock {
+        case .undecided:
+            dragOffset = .zero
+        case .horizontal:
+            dragOffset = CGSize(width: translation.width, height: 0)
+        case .vertical:
+            dragOffset = CGSize(width: 0, height: max(translation.height, 0))
+        }
+    }
+
+    private func resetDragOffset(animated: Bool = true) {
+        let action = {
+            dragOffset = .zero
+            dragAxisLock = .undecided
+        }
+
+        if animated {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82), action)
+        } else {
+            action()
+        }
+    }
+}
+
+private struct OrbitRailView: View {
+    let tags: [TagLibraryEntry]
+    @Binding var selectedTagID: String?
+    let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
+    let onCreateTag: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(tags) { tag in
+                        Button {
+                            selectedTagID = tag.id
+                        } label: {
+                            OrbitTagCapsule(
+                                title: tag.name,
+                                colorHex: tag.colorHex,
+                                isSelected: selectedTagID == tag.id
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button(action: onCreateTag) {
+                        Circle()
+                            .fill(Color(.secondarySystemBackground))
+                            .frame(width: 34, height: 34)
+                            .overlay {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 2)
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(assets, id: \.gridIdentifier) { asset in
+                        PhotoThumbnailView(asset: asset, thumbnailStore: thumbnailStore, cornerRadius: 999, contentMode: .fill)
+                            .frame(width: 34, height: 34)
+                            .clipShape(Circle())
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.white.opacity(0.65), lineWidth: 1)
+                            }
+                            .shadow(color: Color.black.opacity(0.08), radius: 8, y: 4)
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+            .frame(height: 38)
+            .overlay(alignment: .leading) {
+                if assets.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "circle.grid.2x2.fill")
+                            .font(.caption)
+                        Text(L10n.text("orbit.hint", fallback: "Drag down to place photos into Orbit"))
+                            .font(.footnote)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12)
+                }
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.tertiarySystemBackground).opacity(0.72))
+        )
+    }
+}
+
+private struct OrbitTagCapsule: View {
+    let title: String
+    let colorHex: String
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(hex: colorHex) ?? .accentColor)
+                .frame(width: 8, height: 8)
+            Text(title)
+                .font(.footnote.weight(.semibold))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(isSelected ? Color.accentColor.opacity(0.14) : Color(.secondarySystemBackground))
+        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        .overlay {
+            Capsule()
+                .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
+        }
+        .clipShape(Capsule())
     }
 }
 
@@ -1674,6 +1968,7 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
 private struct AssetEditorSheet: View {
     let asset: MediaAsset
     let tagLibrary: [TagLibraryEntry]
+    let tagSuggestions: () async -> [AutoTagSuggestion]
     let onRefresh: () async -> Void
     let onToggleProtection: () async -> Void
     let onToggleScreenshotLike: () async -> Void
@@ -1683,6 +1978,8 @@ private struct AssetEditorSheet: View {
     let onRemoveTag: (MediaTag) async -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var quickTagName = ""
+    @State private var autoSuggestions: [AutoTagSuggestion] = []
 
     var body: some View {
         NavigationStack {
@@ -1740,6 +2037,19 @@ private struct AssetEditorSheet: View {
                     }
                 }
 
+                Section(L10n.text("tags.manager_title", fallback: "Tag Manager")) {
+                    QuickTagEditorSection(
+                        asset: asset,
+                        availableEntries: tagLibrary,
+                        autoSuggestions: autoSuggestions,
+                        quickTagName: $quickTagName,
+                        onRefresh: onRefresh,
+                        onAddTag: onAddTag,
+                        onAddTags: onAddTags,
+                        onRemoveTag: onRemoveTag
+                    )
+                }
+
                 Section(L10n.text("asset.editors", fallback: "Editors")) {
                     if asset.isScreenshot {
                         NavigationLink {
@@ -1781,6 +2091,9 @@ private struct AssetEditorSheet: View {
                         dismiss()
                     }
                 }
+            }
+            .task(id: asset.id) {
+                autoSuggestions = await tagSuggestions()
             }
         }
     }
@@ -1983,6 +2296,133 @@ private struct AssetTagManagerView: View {
         } else {
             selectedBatchTagIDs.insert(entry.id)
         }
+    }
+}
+
+private struct QuickTagEditorSection: View {
+    let asset: MediaAsset
+    let availableEntries: [TagLibraryEntry]
+    let autoSuggestions: [AutoTagSuggestion]
+    @Binding var quickTagName: String
+    let onRefresh: () async -> Void
+    let onAddTag: (String, String) async -> Void
+    let onAddTags: ([TagLibraryEntry]) async -> Void
+    let onRemoveTag: (MediaTag) async -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !asset.tags.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.text("tags.current_tags", fallback: "Current Tags"))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(asset.tags) { tag in
+                                Button {
+                                    Task {
+                                        await onRemoveTag(tag)
+                                        await onRefresh()
+                                    }
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        TagPill(tag: tag)
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !suggestedEntries.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.text("tags.global_library", fallback: "Global Tag Library"))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(suggestedEntries) { entry in
+                                Button {
+                                    Task {
+                                        await onAddTags([entry])
+                                        await onRefresh()
+                                    }
+                                } label: {
+                                    OrbitTagCapsule(
+                                        title: entry.name,
+                                        colorHex: entry.colorHex,
+                                        isSelected: false
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !autoSuggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.text("tags.auto_suggestions", fallback: "Suggested Tags"))
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(autoSuggestions) { suggestion in
+                                Button {
+                                    Task {
+                                        await onAddTag(suggestion.name, suggestion.colorHex)
+                                        await onRefresh()
+                                    }
+                                } label: {
+                                    OrbitTagCapsule(
+                                        title: suggestion.name,
+                                        colorHex: suggestion.colorHex,
+                                        isSelected: false
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                TextField(L10n.text("tags.new_tag", fallback: "New tag"), text: $quickTagName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                Button(L10n.text("common.add", fallback: "Add")) {
+                    let pending = quickTagName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    Task {
+                        await onAddTag(pending, TagColorPreset.ocean.hex)
+                        quickTagName = ""
+                        await onRefresh()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(quickTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var suggestedEntries: [TagLibraryEntry] {
+        let currentNames = Set(asset.tags.map(\.normalizedName))
+        return availableEntries.filter { !currentNames.contains($0.normalizedName) }
     }
 }
 

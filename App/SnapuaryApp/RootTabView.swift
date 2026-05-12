@@ -13,12 +13,6 @@ struct RootTabView: View {
         let _ = settings.preferredLanguage
 
         TabView(selection: $viewModel.selectedTab) {
-            LibraryHomeView(viewModel: viewModel.makeLibraryViewModel())
-                .tabItem {
-                    Label(L10n.text("tab.library", fallback: "Library"), systemImage: "photo.stack")
-                }
-                .tag(RootTab.library)
-
             TagHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
                     Label(L10n.text("tab.tags", fallback: "Tags"), systemImage: "folder")
@@ -27,9 +21,15 @@ struct RootTabView: View {
 
             CleanupHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label(L10n.text("tab.cleanup", fallback: "Cleanup"), systemImage: "trash")
+                    Label(L10n.text("tab.cleanup", fallback: "Orbit"), systemImage: "circle.grid.2x2.fill")
                 }
                 .tag(RootTab.cleanup)
+
+            LibraryHomeView(viewModel: viewModel.makeLibraryViewModel())
+                .tabItem {
+                    Label(L10n.text("tab.library", fallback: "Library"), systemImage: "photo.stack")
+                }
+                .tag(RootTab.library)
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else {

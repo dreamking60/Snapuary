@@ -1,7 +1,7 @@
 "settings.language.system" = "システム設定";
 "tab.library" = "ライブラリ";
 "tab.tags" = "タグ";
-"tab.cleanup" = "クリーンアップ";
+"tab.cleanup" = "オービット";
 "privacy.recent_signals" = "最近のリスクシグナル";
 "privacy.detection_strategy" = "検出方針";
 "privacy.strategy_body" = "まず OCR ベースの透かし検出を行い、その後に社内識別子向けのカスタムルールを追加します。";
@@ -58,6 +58,7 @@
 "cleanup.progress_left" = "%lld / %lld 残り";
 "cleanup.empty_screenshots" = "レビュー待ちのスクリーンショットはありません。";
 "cleanup.empty_photos" = "レビュー待ちの写真はありません。";
+"orbit.hint" = "下にドラッグして写真を Orbit に入れます";
 "cleanup.preview_hint" = "写真をタップすると元画像を表示します。";
 "library.refreshing" = "ライブラリを更新中";
 "cleanup.queue" = "保留";

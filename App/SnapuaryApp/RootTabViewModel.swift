@@ -21,8 +21,10 @@ final class RootTabViewModel {
             thumbnailStore: container.thumbnailStore,
             assetIndexCache: container.assetIndexCache,
             metadataService: container.metadataService,
+            tagCatalogStore: container.tagCatalogStore,
             expirationService: container.expirationService,
-            cleanupSchedulingService: container.cleanupSchedulingService
+            cleanupSchedulingService: container.cleanupSchedulingService,
+            autoTagSuggestionService: container.autoTagSuggestionService
         )
     }
 

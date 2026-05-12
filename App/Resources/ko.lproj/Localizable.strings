@@ -1,7 +1,7 @@
 "settings.language.system" = "시스템 기본값";
 "tab.library" = "라이브러리";
 "tab.tags" = "태그";
-"tab.cleanup" = "정리";
+"tab.cleanup" = "오빗";
 "privacy.recent_signals" = "최근 위험 신호";
 "privacy.detection_strategy" = "감지 전략";
 "privacy.strategy_body" = "먼저 OCR 기반 워터마크 신호 감지를 적용하고, 이후 내부 식별자를 위한 사용자 규칙을 추가합니다.";
@@ -58,6 +58,7 @@
 "cleanup.progress_left" = "%lld / %lld 남음";
 "cleanup.empty_screenshots" = "검토 대기 중인 스크린샷이 없습니다.";
 "cleanup.empty_photos" = "검토 대기 중인 사진이 없습니다.";
+"orbit.hint" = "아래로 끌어 사진을 Orbit에 넣으세요";
 "cleanup.preview_hint" = "사진을 탭하면 원본을 볼 수 있습니다.";
 "library.refreshing" = "라이브러리 새로고침 중";
 "cleanup.queue" = "보류";
