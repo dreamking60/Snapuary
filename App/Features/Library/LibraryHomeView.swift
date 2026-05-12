@@ -150,10 +150,8 @@ struct CleanupHomeView: View {
     @State private var selectedAsset: MediaAsset?
     @State private var previewAsset: MediaAsset?
     @State private var reviewIndex = 0
-    @State private var orbitedAssets: [MediaAsset] = []
-    @State private var selectedOrbitTagID: String?
-    @State private var isShowingCreateOrbitTag = false
-    @State private var draftOrbitTagName = ""
+    @State private var isShowingCreateOrbit = false
+    @State private var draftOrbitName = ""
 
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
@@ -184,9 +182,20 @@ struct CleanupHomeView: View {
                         pendingDeletionLimit: viewModel.pendingDeletionLimit,
                         pendingDeletionPreviewAsset: viewModel.lastPendingDeletionAsset,
                         isCommittingDeletion: viewModel.isRunningCleanup,
-                        orbitTags: viewModel.tagLibrary,
-                        selectedOrbitTagID: $selectedOrbitTagID,
-                        orbitedAssets: orbitedAssets,
+                        orbitCollections: viewModel.orbitCollections,
+                        selectedOrbitID: Binding(
+                            get: { viewModel.focusedOrbitID },
+                            set: { viewModel.focusOrbit($0) }
+                        ),
+                        orbitAssetCounts: viewModel.orbitAssetCounts,
+                        orbitAssets: viewModel.assets(in: viewModel.focusedOrbitID),
+                        recipeCollections: viewModel.recipeCollections,
+                        activeRecipe: viewModel.activeRecipe,
+                        weeklyRecap: viewModel.weeklyOrbitRecap,
+                        clusterGroups: viewModel.clusterReviewGroups,
+                        smartSuggestionsProvider: { asset in
+                            viewModel.orbitSuggestions(for: asset)
+                        },
                         onOpenDetail: { asset in
                             selectedAsset = asset
                         },
@@ -198,14 +207,13 @@ struct CleanupHomeView: View {
                             clampReviewIndex()
                         },
                         onOrbit: { asset in
-                            if let selectedTag = viewModel.tagLibrary.first(where: { $0.id == selectedOrbitTagID }) {
-                                await viewModel.addTags([selectedTag], to: asset)
+                            let targetOrbitID = viewModel.focusedOrbitID
+                                ?? viewModel.orbitSuggestions(for: asset).first?.orbitID
+                                ?? viewModel.orbitCollections.first?.id
+                            if let targetOrbitID {
+                                await viewModel.assignAsset(asset, to: targetOrbitID)
                             }
                             await viewModel.protectFromCleanup(asset)
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.84)) {
-                                orbitedAssets.removeAll { $0.gridIdentifier == asset.gridIdentifier }
-                                orbitedAssets.insert(asset, at: 0)
-                            }
                             clampReviewIndex()
                         },
                         onDelete: { asset in
@@ -221,8 +229,12 @@ struct CleanupHomeView: View {
                     } onCommitDelete: {
                         _ = await viewModel.commitPendingDeletions()
                         clampReviewIndex()
-                    } onCreateTag: {
-                        isShowingCreateOrbitTag = true
+                    } onCreateOrbit: {
+                        isShowingCreateOrbit = true
+                    } onSelectRecipe: { orbit in
+                        let shouldClear = viewModel.activeRecipe == orbit.recipe
+                        viewModel.focusOrbit(orbit.id)
+                        viewModel.activateRecipe(shouldClear ? nil : orbit.recipe)
                     }
                     .padding()
                     .id(languageRefreshKey)
@@ -239,17 +251,17 @@ struct CleanupHomeView: View {
                 } else {
                     await viewModel.prepareCleanupData()
                 }
-                if selectedOrbitTagID == nil {
-                    selectedOrbitTagID = viewModel.tagLibrary.first?.id
+                if viewModel.focusedOrbitID == nil {
+                    viewModel.focusOrbit(viewModel.orbitCollections.first?.id)
                 }
             }
-            .onChange(of: viewModel.tagLibrary.map(\.id)) { _, ids in
+            .onChange(of: viewModel.orbitCollections.map(\.id)) { _, ids in
                 guard let first = ids.first else {
-                    selectedOrbitTagID = nil
+                    viewModel.focusOrbit(nil)
                     return
                 }
-                if selectedOrbitTagID == nil || !ids.contains(selectedOrbitTagID ?? "") {
-                    selectedOrbitTagID = first
+                if viewModel.focusedOrbitID == nil || !ids.contains(viewModel.focusedOrbitID ?? "") {
+                    viewModel.focusOrbit(first)
                 }
             }
             .alert(
@@ -269,23 +281,23 @@ struct CleanupHomeView: View {
             } message: {
                 Text(viewModel.cleanupReviewMessage ?? "")
             }
-            .alert(L10n.text("tags.create_tag", fallback: "Create Tag"), isPresented: $isShowingCreateOrbitTag) {
-                TextField(L10n.text("tags.new_tag", fallback: "New tag"), text: $draftOrbitTagName)
+            .alert(L10n.text("orbit.create", fallback: "Create Orbit"), isPresented: $isShowingCreateOrbit) {
+                TextField(L10n.text("orbit.new_name", fallback: "New orbit"), text: $draftOrbitName)
                 Button(L10n.text("common.cancel", fallback: "Cancel"), role: .cancel) {
-                    draftOrbitTagName = ""
+                    draftOrbitName = ""
                 }
                 Button(L10n.text("common.save", fallback: "Save")) {
                     Task {
-                        let pendingName = draftOrbitTagName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let pendingName = draftOrbitName.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !pendingName.isEmpty else {
                             return
                         }
-                        let entry = await viewModel.createTagTemplate(
+                        let orbit = await viewModel.createOrbit(
                             name: pendingName,
                             colorHex: TagColorPreset.ocean.hex
                         )
-                        selectedOrbitTagID = entry?.id
-                        draftOrbitTagName = ""
+                        viewModel.focusOrbit(orbit?.id)
+                        draftOrbitName = ""
                     }
                 }
             }
@@ -786,9 +798,15 @@ private struct ScreenshotSlashView: View {
     let pendingDeletionLimit: Int
     let pendingDeletionPreviewAsset: MediaAsset?
     let isCommittingDeletion: Bool
-    let orbitTags: [TagLibraryEntry]
-    @Binding var selectedOrbitTagID: String?
-    let orbitedAssets: [MediaAsset]
+    let orbitCollections: [OrbitCollection]
+    @Binding var selectedOrbitID: String?
+    let orbitAssetCounts: [String: Int]
+    let orbitAssets: [MediaAsset]
+    let recipeCollections: [OrbitCollection]
+    let activeRecipe: OrbitRecipeKind?
+    let weeklyRecap: OrbitWeeklyRecap
+    let clusterGroups: [OrbitReviewCluster]
+    let smartSuggestionsProvider: (MediaAsset) -> [OrbitSuggestion]
     let onOpenDetail: (MediaAsset) -> Void
     let onPreview: (MediaAsset) -> Void
     let onKeep: (MediaAsset) async -> Void
@@ -796,7 +814,8 @@ private struct ScreenshotSlashView: View {
     let onDelete: (MediaAsset) async -> Bool
     let onUndoDelete: () -> Void
     let onCommitDelete: () async -> Void
-    let onCreateTag: () -> Void
+    let onCreateOrbit: () -> Void
+    let onSelectRecipe: (OrbitCollection) -> Void
 
     var body: some View {
         VStack(spacing: 24) {
@@ -807,9 +826,15 @@ private struct ScreenshotSlashView: View {
                     asset: asset,
                     nextAsset: nextAsset,
                     thumbnailStore: thumbnailStore,
-                    orbitTags: orbitTags,
-                    selectedOrbitTagID: $selectedOrbitTagID,
-                    orbitedAssets: orbitedAssets,
+                    orbitCollections: orbitCollections,
+                    selectedOrbitID: $selectedOrbitID,
+                    orbitAssetCounts: orbitAssetCounts,
+                    orbitAssets: orbitAssets,
+                    smartSuggestions: smartSuggestionsProvider(asset),
+                    recipeCollections: recipeCollections,
+                    activeRecipe: activeRecipe,
+                    weeklyRecap: weeklyRecap,
+                    clusterGroups: clusterGroups,
                     onPreview: { onPreview(asset) },
                     onOpenDetail: { onOpenDetail(asset) },
                     onKeep: {
@@ -826,7 +851,8 @@ private struct ScreenshotSlashView: View {
                             advanceAfterAction()
                         }
                     },
-                    onCreateTag: onCreateTag
+                    onCreateOrbit: onCreateOrbit,
+                    onSelectRecipe: onSelectRecipe
                 )
                 .id(asset.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -953,15 +979,22 @@ private struct ScreenshotSlashCard: View {
     let asset: MediaAsset
     let nextAsset: MediaAsset?
     let thumbnailStore: PhotoLibraryThumbnailStore
-    let orbitTags: [TagLibraryEntry]
-    @Binding var selectedOrbitTagID: String?
-    let orbitedAssets: [MediaAsset]
+    let orbitCollections: [OrbitCollection]
+    @Binding var selectedOrbitID: String?
+    let orbitAssetCounts: [String: Int]
+    let orbitAssets: [MediaAsset]
+    let smartSuggestions: [OrbitSuggestion]
+    let recipeCollections: [OrbitCollection]
+    let activeRecipe: OrbitRecipeKind?
+    let weeklyRecap: OrbitWeeklyRecap
+    let clusterGroups: [OrbitReviewCluster]
     let onPreview: () -> Void
     let onOpenDetail: () -> Void
     let onKeep: () async -> Void
     let onOrbit: () async -> Void
     let onDelete: () async -> Void
-    let onCreateTag: () -> Void
+    let onCreateOrbit: () -> Void
+    let onSelectRecipe: (OrbitCollection) -> Void
 
     @State private var dragOffset: CGSize = .zero
     @State private var isActing = false
@@ -969,10 +1002,17 @@ private struct ScreenshotSlashCard: View {
 
     var body: some View {
         VStack(spacing: 20) {
+            OrbitRecipeStrip(
+                collections: recipeCollections,
+                activeRecipe: activeRecipe,
+                onSelect: onSelectRecipe
+            )
+
             GeometryReader { geometry in
                 let activeHorizontalOffset = dragAxisLock == .horizontal ? dragOffset.width : 0
                 let activeVerticalOffset = dragAxisLock == .vertical ? max(dragOffset.height, 0) : 0
-                let orbitProgress = min(max(activeVerticalOffset / 180, 0), 1)
+                let orbitProgress = min(max((activeVerticalOffset - 24) / 180, 0), 1)
+                let orbitCueProgress = min(max(activeVerticalOffset / 140, 0), 1)
                 let targetSize: CGFloat = 58
                 let baseHeight: CGFloat = 440
                 let baseWidth = max(min(geometry.size.width, 380), targetSize)
@@ -988,7 +1028,7 @@ private struct ScreenshotSlashCard: View {
                             overlayOpacity: 0.18
                         )
                         .scaleEffect(0.94)
-                        .opacity(1)
+                        .opacity(dragAxisLock == .vertical ? max(0.18, 1 - orbitCueProgress * 2.6) : 1)
                         .offset(y: 18)
                     }
 
@@ -1016,15 +1056,15 @@ private struct ScreenshotSlashCard: View {
                                 .padding(.trailing, 18)
                         }
                     }
-                    .overlay(alignment: .bottom) {
-                        if dragAxisLock == .vertical, activeVerticalOffset > 24 {
-                            orbitCue(emphasis: min(activeVerticalOffset / 160, 1))
-                                .padding(.bottom, 22)
+                    .overlay(alignment: .top) {
+                        if dragAxisLock == .vertical {
+                            orbitCue(emphasis: orbitCueProgress)
+                                .padding(.top, 26)
                         }
                     }
                     .offset(
                         x: activeHorizontalOffset,
-                        y: dragAxisLock == .vertical ? activeVerticalOffset * 0.42 : 0
+                        y: dragAxisLock == .vertical ? activeVerticalOffset * 0.5 : 0
                     )
                     .rotationEffect(
                         .degrees(
@@ -1066,12 +1106,20 @@ private struct ScreenshotSlashCard: View {
             .frame(height: 470)
 
             OrbitRailView(
-                tags: orbitTags,
-                selectedTagID: $selectedOrbitTagID,
-                assets: orbitedAssets,
+                collections: orbitCollections,
+                selectedOrbitID: $selectedOrbitID,
+                assetCounts: orbitAssetCounts,
+                assets: orbitAssets,
                 thumbnailStore: thumbnailStore,
-                onCreateTag: onCreateTag
+                suggestions: smartSuggestions,
+                onCreateOrbit: onCreateOrbit
             )
+
+            OrbitRecapCard(recap: weeklyRecap)
+
+            if let primaryCluster = clusterGroups.first {
+                OrbitClusterCard(cluster: primaryCluster)
+            }
 
             HStack(spacing: 16) {
                 ActionOrbButton(
@@ -1152,18 +1200,23 @@ private struct ScreenshotSlashCard: View {
     }
 
     private func orbitCue(emphasis: Double) -> some View {
-        Image(systemName: "arrow.down.circle.fill")
-            .font(.system(size: 22, weight: .semibold))
-            .foregroundStyle(Color.accentColor.opacity(0.9))
-            .frame(width: 42, height: 42)
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay {
-                Circle()
-                    .stroke(Color.white.opacity(0.35), lineWidth: 0.8)
-            }
-            .shadow(color: Color.black.opacity(0.06), radius: 10, y: 6)
-            .opacity(0.56 + (0.24 * emphasis))
-            .scaleEffect(0.96 + (0.06 * emphasis))
+        HStack(spacing: 8) {
+            Image(systemName: "circle.hexagongrid.fill")
+                .font(.system(size: 13, weight: .semibold))
+            Text(L10n.text("orbit.drop_target", fallback: "Orbit"))
+                .font(.footnote.weight(.semibold))
+        }
+        .foregroundStyle(Color.accentColor.opacity(0.92))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.white.opacity(0.34), lineWidth: 0.8)
+        }
+        .shadow(color: Color.black.opacity(0.05), radius: 10, y: 5)
+        .opacity(0.32 + (0.42 * emphasis))
+        .scaleEffect(0.94 + (0.05 * emphasis))
     }
 
     private func performKeep() async {
@@ -1239,30 +1292,47 @@ private struct ScreenshotSlashCard: View {
 }
 
 private struct OrbitRailView: View {
-    let tags: [TagLibraryEntry]
-    @Binding var selectedTagID: String?
+    let collections: [OrbitCollection]
+    @Binding var selectedOrbitID: String?
+    let assetCounts: [String: Int]
     let assets: [MediaAsset]
     let thumbnailStore: PhotoLibraryThumbnailStore
-    let onCreateTag: () -> Void
+    let suggestions: [OrbitSuggestion]
+    let onCreateOrbit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if let topSuggestion = suggestions.first,
+               let suggestedOrbit = collections.first(where: { $0.id == topSuggestion.orbitID }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                    Text("Smart Orbit: \(suggestedOrbit.name)")
+                        .font(.footnote.weight(.semibold))
+                    Spacer()
+                }
+                .foregroundStyle(.secondary)
+            }
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(tags) { tag in
+                    ForEach(collections) { orbit in
                         Button {
-                            selectedTagID = tag.id
+                            selectedOrbitID = orbit.id
                         } label: {
                             OrbitTagCapsule(
-                                title: tag.name,
-                                colorHex: tag.colorHex,
-                                isSelected: selectedTagID == tag.id
+                                title: orbit.name,
+                                colorHex: orbit.colorHex,
+                                symbolName: orbit.symbolName,
+                                count: assetCounts[orbit.id] ?? 0,
+                                isSelected: selectedOrbitID == orbit.id
                             )
                         }
                         .buttonStyle(.plain)
                     }
 
-                    Button(action: onCreateTag) {
+                    Button(action: onCreateOrbit) {
                         Circle()
                             .fill(Color(.secondarySystemBackground))
                             .frame(width: 34, height: 34)
@@ -1321,6 +1391,8 @@ private struct OrbitRailView: View {
 private struct OrbitTagCapsule: View {
     let title: String
     let colorHex: String
+    let symbolName: String
+    let count: Int
     let isSelected: Bool
 
     var body: some View {
@@ -1328,9 +1400,18 @@ private struct OrbitTagCapsule: View {
             Circle()
                 .fill(Color(hex: colorHex) ?? .accentColor)
                 .frame(width: 8, height: 8)
+            Image(systemName: symbolName)
+                .font(.caption2.weight(.semibold))
             Text(title)
                 .font(.footnote.weight(.semibold))
                 .lineLimit(1)
+            if count > 0 {
+                Text("\(count)")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(isSelected ? Color.white.opacity(0.18) : Color.primary.opacity(0.06), in: Capsule())
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -1341,6 +1422,114 @@ private struct OrbitTagCapsule: View {
                 .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1)
         }
         .clipShape(Capsule())
+    }
+}
+
+private struct OrbitRecipeStrip: View {
+    let collections: [OrbitCollection]
+    let activeRecipe: OrbitRecipeKind?
+    let onSelect: (OrbitCollection) -> Void
+
+    var body: some View {
+        if !collections.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(collections) { collection in
+                        let isSelected = activeRecipe == collection.recipe
+                        Button {
+                            onSelect(collection)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Label(collection.recipe?.title ?? collection.name, systemImage: collection.symbolName)
+                                    .font(.subheadline.weight(.semibold))
+                                if let subtitle = collection.recipe?.subtitle {
+                                    Text(subtitle)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                            .frame(width: 180, alignment: .leading)
+                            .padding(14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .fill(isSelected ? Color.accentColor.opacity(0.12) : Color(.secondarySystemBackground))
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .stroke(isSelected ? Color.accentColor.opacity(0.35) : Color.clear, lineWidth: 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct OrbitRecapCard: View {
+    let recap: OrbitWeeklyRecap
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Weekly Recap")
+                .font(.headline)
+
+            HStack(spacing: 12) {
+                recapMetric(title: "Orbited", value: recap.assignedCount)
+                recapMetric(title: "Kept", value: recap.keptCount)
+                recapMetric(title: "Deleted", value: recap.deletedCount)
+            }
+
+            if !recap.topOrbitNames.isEmpty {
+                Text("Top orbits: \(recap.topOrbitNames.joined(separator: ", "))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
+    private func recapMetric(title: String, value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(value)")
+                .font(.title3.weight(.bold))
+            Text(title)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct OrbitClusterCard: View {
+    let cluster: OrbitReviewCluster
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "square.stack.3d.down.right")
+                .font(.title3)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Cluster Review")
+                    .font(.headline)
+                Text("\(cluster.count) related items around \(cluster.title)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemBackground))
+        )
     }
 }
 
@@ -2358,6 +2547,8 @@ private struct QuickTagEditorSection: View {
                                     OrbitTagCapsule(
                                         title: entry.name,
                                         colorHex: entry.colorHex,
+                                        symbolName: "tag.fill",
+                                        count: 0,
                                         isSelected: false
                                     )
                                 }
@@ -2386,6 +2577,8 @@ private struct QuickTagEditorSection: View {
                                     OrbitTagCapsule(
                                         title: suggestion.name,
                                         colorHex: suggestion.colorHex,
+                                        symbolName: "sparkles",
+                                        count: 0,
                                         isSelected: false
                                     )
                                 }

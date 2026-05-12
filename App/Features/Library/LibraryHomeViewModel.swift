@@ -58,6 +58,7 @@ final class LibraryHomeViewModel {
     private let assetIndexCache: MediaAssetIndexCaching
     private let metadataService: MediaAssetMetadataServing
     private let tagCatalogStore: TagCatalogServing
+    private let orbitLibraryStore: OrbitLibraryServing
     private let expirationService: ScreenshotExpirationServing
     private let cleanupSchedulingService: CleanupSchedulingServing
     private let autoTagSuggestionService: AutoTagSuggesting
@@ -87,6 +88,10 @@ final class LibraryHomeViewModel {
     private(set) var isSyncingCleanupData = false
     private(set) var cleanupReviewMessage: String?
     private(set) var pendingDeletionAssets: [MediaAsset] = []
+    private(set) var orbitCollections: [OrbitCollection] = []
+    private(set) var orbitHistory: [OrbitSessionEvent] = []
+    private(set) var focusedOrbitID: String?
+    private(set) var activeRecipe: OrbitRecipeKind?
     private(set) var loadedAssetCount = 0
     private(set) var totalAssetCount = 0
     private(set) var isRunningCleanup = false
@@ -100,6 +105,7 @@ final class LibraryHomeViewModel {
     private var hasLoadedCompleteLibrary = false
     private var hasHydratedCache = false
     private var hasHydratedTagSources = false
+    private var hasHydratedOrbitLibrary = false
     private var hasSynchronizedBrowsingThisLaunch = false
     private var hasSynchronizedCompleteThisLaunch = false
     private var cachedFingerprint: PhotoLibraryFingerprint?
@@ -115,6 +121,7 @@ final class LibraryHomeViewModel {
         assetIndexCache: MediaAssetIndexCaching,
         metadataService: MediaAssetMetadataServing,
         tagCatalogStore: TagCatalogServing,
+        orbitLibraryStore: OrbitLibraryServing,
         expirationService: ScreenshotExpirationServing,
         cleanupSchedulingService: CleanupSchedulingServing,
         autoTagSuggestionService: AutoTagSuggesting = TemplateAutoTagSuggestionService()
@@ -124,6 +131,7 @@ final class LibraryHomeViewModel {
         self.assetIndexCache = assetIndexCache
         self.metadataService = metadataService
         self.tagCatalogStore = tagCatalogStore
+        self.orbitLibraryStore = orbitLibraryStore
         self.expirationService = expirationService
         self.cleanupSchedulingService = cleanupSchedulingService
         self.autoTagSuggestionService = autoTagSuggestionService
@@ -255,8 +263,105 @@ final class LibraryHomeViewModel {
         ])
     }
 
+    var orbitAssetCounts: [String: Int] {
+        Dictionary(grouping: assets.flatMap { asset in
+            asset.orbitIDs.map { ($0, asset.id) }
+        }, by: \.0).mapValues { entries in
+            Set(entries.map(\.1)).count
+        }
+    }
+
     func autoTagSuggestions(for asset: MediaAsset) async -> [AutoTagSuggestion] {
         await autoTagSuggestionService.suggestions(for: asset, within: assets)
+    }
+
+    func orbitSuggestions(for asset: MediaAsset) -> [OrbitSuggestion] {
+        orbitCollections.compactMap { orbit in
+            guard let rule = orbit.autoRule else {
+                return nil
+            }
+            guard let match = smartOrbitMatch(for: asset, rule: rule) else {
+                return nil
+            }
+
+            return OrbitSuggestion(
+                id: "\(orbit.id)-\(asset.id.uuidString)",
+                orbitID: orbit.id,
+                reason: match.reason,
+                confidence: match.confidence
+            )
+        }
+        .sorted { $0.confidence > $1.confidence }
+    }
+
+    var recipeCollections: [OrbitCollection] {
+        orbitCollections.filter { $0.recipe != nil }
+    }
+
+    var weeklyOrbitRecap: OrbitWeeklyRecap {
+        let calendar = Calendar.current
+        let weekStart = calendar.dateInterval(of: .weekOfYear, for: .now)?.start ?? .now
+        let weekEvents = orbitHistory.filter { $0.occurredAt >= weekStart }
+        let assigned = weekEvents.filter { $0.action == .assigned }
+        let kept = weekEvents.filter { $0.action == .kept }
+        let deleted = weekEvents.filter { $0.action == .deleted }
+        let orbitNames = Dictionary(grouping: assigned.compactMap(\.orbitID), by: { $0 })
+            .sorted { $0.value.count > $1.value.count }
+            .prefix(3)
+            .compactMap { orbitID, _ in
+                orbitCollections.first(where: { $0.id == orbitID })?.name
+            }
+
+        return OrbitWeeklyRecap(
+            assignedCount: assigned.count,
+            keptCount: kept.count,
+            deletedCount: deleted.count,
+            topOrbitNames: orbitNames,
+            weekStart: weekStart
+        )
+    }
+
+    var clusterReviewGroups: [OrbitReviewCluster] {
+        let sortedAssets = cleanupReviewQueue.sorted { $0.createdAt > $1.createdAt }
+        guard !sortedAssets.isEmpty else {
+            return []
+        }
+
+        var groups: [[MediaAsset]] = []
+        var currentGroup: [MediaAsset] = [sortedAssets[0]]
+
+        for asset in sortedAssets.dropFirst() {
+            guard let previous = currentGroup.last else {
+                currentGroup = [asset]
+                continue
+            }
+
+            let sameDay = Calendar.current.isDate(asset.createdAt, inSameDayAs: previous.createdAt)
+            let closeInTime = abs(asset.createdAt.timeIntervalSince(previous.createdAt)) <= 180
+            if sameDay && closeInTime {
+                currentGroup.append(asset)
+            } else {
+                if currentGroup.count > 1 {
+                    groups.append(currentGroup)
+                }
+                currentGroup = [asset]
+            }
+        }
+
+        if currentGroup.count > 1 {
+            groups.append(currentGroup)
+        }
+
+        return groups.prefix(6).enumerated().map { index, group in
+            let title = group.first?.createdAt.formatted(date: .abbreviated, time: .shortened)
+                ?? "Cluster \(index + 1)"
+            return OrbitReviewCluster(
+                id: "cluster-\(index)-\(group.map(\.gridIdentifier).joined(separator: "-"))",
+                title: title,
+                assetIDs: group.map(\.id),
+                count: group.count
+            )
+        }
     }
 
     var filteredAssets: [MediaAsset] {
@@ -293,12 +398,20 @@ final class LibraryHomeViewModel {
     }
 
     var cleanupReviewQueue: [MediaAsset] {
+        let baseAssets: [MediaAsset]
+
         switch cleanupReviewMode {
         case .screenshots:
-            cleanupScopedAssets.filter { !$0.isProtectedFromCleanup }
+            baseAssets = cleanupScopedAssets.filter { !$0.isProtectedFromCleanup }
         case .allPhotos:
-            assets.filter { !$0.isProtectedFromCleanup }
+            baseAssets = assets.filter { !$0.isProtectedFromCleanup }
         }
+
+        guard let activeRecipe else {
+            return baseAssets
+        }
+
+        return baseAssets.filter { matchesRecipe($0, recipe: activeRecipe) }
     }
 
     var pendingDeletionCount: Int {
@@ -317,6 +430,24 @@ final class LibraryHomeViewModel {
         assets.filter { asset in
             asset.tags.contains { $0.normalizedName == tagEntry.normalizedName }
         }
+    }
+
+    func assets(in orbitID: String?) -> [MediaAsset] {
+        guard let orbitID else {
+            return []
+        }
+
+        return assets
+            .filter { $0.orbitIDs.contains(orbitID) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func focusOrbit(_ orbitID: String?) {
+        focusedOrbitID = orbitID
+    }
+
+    func activateRecipe(_ recipe: OrbitRecipeKind?) {
+        activeRecipe = recipe
     }
 
     func toggleTag(_ tag: MediaTag) {
@@ -352,7 +483,15 @@ final class LibraryHomeViewModel {
         }
 
         assets[index].isProtectedFromCleanup = true
+        recordOrbitEvent(
+            OrbitSessionEvent(
+                assetIdentifier: assets[index].gridIdentifier,
+                orbitID: assets[index].orbitIDs.first,
+                action: .kept
+            )
+        )
         await persistMetadata(for: assets[index])
+        await persistOrbitLibrary()
         recalculateCleanupState()
     }
 
@@ -581,6 +720,65 @@ final class LibraryHomeViewModel {
         return tagLibrary.first(where: { $0.normalizedName == trimmedName.lowercased() })
     }
 
+    func createOrbit(
+        name: String,
+        colorHex: String = "#4F7CAC",
+        symbolName: String = "circle.hexagongrid.fill",
+        recipe: OrbitRecipeKind? = nil,
+        autoRule: SmartOrbitRule? = nil
+    ) async -> OrbitCollection? {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            return nil
+        }
+
+        let orbitID = trimmedName
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+        if orbitCollections.contains(where: { $0.id == orbitID }) {
+            return orbitCollections.first(where: { $0.id == orbitID })
+        }
+
+        let orbit = OrbitCollection(
+            id: orbitID,
+            name: trimmedName,
+            colorHex: colorHex,
+            symbolName: symbolName,
+            recipe: recipe,
+            autoRule: autoRule
+        )
+        orbitCollections.append(orbit)
+        focusedOrbitID = orbit.id
+        await persistOrbitLibrary()
+        return orbit
+    }
+
+    func assignAsset(_ asset: MediaAsset, to orbitID: String) async {
+        guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
+            return
+        }
+
+        if !assets[index].orbitIDs.contains(orbitID) {
+            assets[index].orbitIDs.insert(orbitID, at: 0)
+        }
+        focusedOrbitID = orbitID
+
+        if let orbitIndex = orbitCollections.firstIndex(where: { $0.id == orbitID }),
+           orbitCollections[orbitIndex].coverAssetIdentifier == nil {
+            orbitCollections[orbitIndex].coverAssetIdentifier = assets[index].libraryIdentifier
+        }
+
+        recordOrbitEvent(
+            OrbitSessionEvent(
+                assetIdentifier: assets[index].gridIdentifier,
+                orbitID: orbitID,
+                action: .assigned
+            )
+        )
+        await persistMetadata(for: assets[index])
+        await persistOrbitLibrary()
+    }
+
     func runCleanupNow() async {
         guard !isRunningCleanup else {
             return
@@ -636,6 +834,14 @@ final class LibraryHomeViewModel {
                 refreshCleanupStateFromScopedAssets()
             }
 
+            recordOrbitEvent(
+                OrbitSessionEvent(
+                    assetIdentifier: asset.gridIdentifier,
+                    orbitID: asset.orbitIDs.first,
+                    action: .deleted
+                )
+            )
+
             lastCleanupResult = CleanupExecutionResult(
                 deletedCount: 1,
                 deletedAssetTitles: [asset.title]
@@ -643,6 +849,7 @@ final class LibraryHomeViewModel {
             recordCleanupDeletion(count: 1)
             cleanupReviewMessage = nil
             await persistSnapshot()
+            await persistOrbitLibrary()
             return true
         } catch {
             cleanupReviewMessage = L10n.text("cleanup.delete_denied_single", fallback: "Deletion was not allowed. The screenshot was kept.")
@@ -690,6 +897,15 @@ final class LibraryHomeViewModel {
             await refreshTagSources()
 
             pendingDeletionAssets.removeAll()
+            for asset in stagedAssets {
+                recordOrbitEvent(
+                    OrbitSessionEvent(
+                        assetIdentifier: asset.gridIdentifier,
+                        orbitID: asset.orbitIDs.first,
+                        action: .deleted
+                    )
+                )
+            }
             lastCleanupResult = CleanupExecutionResult(
                 deletedCount: stagedAssets.count,
                 deletedAssetTitles: stagedAssets.map(\.title)
@@ -697,6 +913,7 @@ final class LibraryHomeViewModel {
             recordCleanupDeletion(count: stagedAssets.count)
             cleanupReviewMessage = nil
             await persistSnapshot()
+            await persistOrbitLibrary()
             return true
         } catch {
             restorePendingDeletionAssets(stagedAssets)
@@ -888,6 +1105,7 @@ final class LibraryHomeViewModel {
 
         hasHydratedCache = true
         await hydrateTagSourcesIfNeeded()
+        await hydrateOrbitLibraryIfNeeded()
 
         do {
             guard let snapshot = try await assetIndexCache.loadSnapshot() else {
@@ -934,6 +1152,7 @@ final class LibraryHomeViewModel {
         let record = MediaAssetMetadataRecord(
             isImportedScreenshotLike: asset.kind == .importedScreenshotLike,
             tags: asset.tags,
+            orbitIDs: asset.orbitIDs,
             screenshotRule: asset.kind == .photo ? nil : asset.screenshotRule,
             isProtectedFromCleanup: asset.isProtectedFromCleanup
         )
@@ -988,6 +1207,15 @@ final class LibraryHomeViewModel {
         updateCleanupPromptState()
     }
 
+    private func hydrateOrbitLibraryIfNeeded() async {
+        guard !hasHydratedOrbitLibrary else {
+            return
+        }
+
+        hasHydratedOrbitLibrary = true
+        await refreshOrbitLibrary()
+    }
+
     private func hydrateTagSourcesIfNeeded() async {
         guard !hasHydratedTagSources else {
             return
@@ -1009,6 +1237,37 @@ final class LibraryHomeViewModel {
             savedTagCatalogEntries = try await tagCatalogStore.loadEntries()
         } catch {
             savedTagCatalogEntries = []
+        }
+    }
+
+    private func refreshOrbitLibrary() async {
+        do {
+            let snapshot = try await orbitLibraryStore.loadLibrary()
+            orbitCollections = snapshot.collections
+            orbitHistory = snapshot.history
+        } catch {
+            orbitCollections = []
+            orbitHistory = []
+        }
+    }
+
+    private func persistOrbitLibrary() async {
+        do {
+            try await orbitLibraryStore.saveLibrary(
+                OrbitLibrarySnapshot(
+                    collections: orbitCollections,
+                    history: orbitHistory.suffix(500).map { $0 }
+                )
+            )
+        } catch {
+            authorizationErrorMessage = L10n.text("error.save_metadata", fallback: "Failed to save local asset metadata.")
+        }
+    }
+
+    private func recordOrbitEvent(_ event: OrbitSessionEvent) {
+        orbitHistory.append(event)
+        if orbitHistory.count > 500 {
+            orbitHistory.removeFirst(orbitHistory.count - 500)
         }
     }
 
@@ -1249,6 +1508,98 @@ final class LibraryHomeViewModel {
             readyToCleanCount: 0
         )
         cleanupCandidates = []
+    }
+
+    private func smartOrbitMatch(
+        for asset: MediaAsset,
+        rule: SmartOrbitRule
+    ) -> (reason: String, confidence: Int)? {
+        let lowercasedTitle = asset.title.lowercased()
+        let createdHour = Calendar.current.component(.hour, from: asset.createdAt)
+        let weekday = Calendar.current.component(.weekday, from: asset.createdAt)
+
+        switch rule {
+        case .receipt:
+            guard lowercasedTitle.contains("receipt")
+                || lowercasedTitle.contains("invoice")
+                || lowercasedTitle.contains("bill") else {
+                return nil
+            }
+            return ("Title matches receipts or invoices.", 92)
+        case .document:
+            guard lowercasedTitle.contains("scan")
+                || lowercasedTitle.contains("doc")
+                || lowercasedTitle.contains("pdf") else {
+                return nil
+            }
+            return ("Title looks like a scanned document.", 86)
+        case .designReference:
+            guard lowercasedTitle.contains("design")
+                || lowercasedTitle.contains("figma")
+                || lowercasedTitle.contains("ui") else {
+                return nil
+            }
+            return ("Title looks like a design reference.", 90)
+        case .chat:
+            guard lowercasedTitle.contains("chat")
+                || lowercasedTitle.contains("message")
+                || lowercasedTitle.contains("whatsapp") else {
+                return nil
+            }
+            return ("Title looks chat-related.", 78)
+        case .meme:
+            guard lowercasedTitle.contains("meme")
+                || lowercasedTitle.contains("funny") else {
+                return nil
+            }
+            return ("Title suggests meme content.", 75)
+        case .study:
+            guard lowercasedTitle.contains("note")
+                || lowercasedTitle.contains("study")
+                || lowercasedTitle.contains("lecture") else {
+                return nil
+            }
+            return ("Title looks like study material.", 80)
+        case .travel:
+            guard lowercasedTitle.contains("trip")
+                || lowercasedTitle.contains("travel")
+                || lowercasedTitle.contains("flight") else {
+                return nil
+            }
+            return ("Title suggests travel planning.", 78)
+        case .toPost:
+            guard asset.kind == .photo && !asset.isScreenshot else {
+                return nil
+            }
+            return ("Photo is a strong candidate for later posting.", 62)
+        case .weekend:
+            guard weekday == 1 || weekday == 7 else {
+                return nil
+            }
+            return ("Captured on a weekend.", 70)
+        case .nightCapture:
+            guard createdHour >= 20 || createdHour < 5 else {
+                return nil
+            }
+            return ("Captured at night.", 74)
+        }
+    }
+
+    private func matchesRecipe(_ asset: MediaAsset, recipe: OrbitRecipeKind) -> Bool {
+        switch recipe {
+        case .clearScreenshots:
+            asset.isScreenshot
+        case .archiveReceipts:
+            smartOrbitMatch(for: asset, rule: .receipt) != nil
+                || smartOrbitMatch(for: asset, rule: .document) != nil
+        case .collectInspiration:
+            smartOrbitMatch(for: asset, rule: .designReference) != nil
+                || smartOrbitMatch(for: asset, rule: .meme) != nil
+                || smartOrbitMatch(for: asset, rule: .toPost) != nil
+        case .weekendReset:
+            smartOrbitMatch(for: asset, rule: .weekend) != nil
+                || smartOrbitMatch(for: asset, rule: .nightCapture) != nil
+        }
     }
 }
 

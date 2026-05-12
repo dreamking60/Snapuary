@@ -321,6 +321,7 @@ struct MetadataMergingPhotoLibraryService: PhotoLibraryServing {
         }
 
         mergedAsset.tags = metadata.tags
+        mergedAsset.orbitIDs = metadata.orbitIDs
         mergedAsset.isProtectedFromCleanup = metadata.isProtectedFromCleanup
 
         if mergedAsset.isScreenshot {

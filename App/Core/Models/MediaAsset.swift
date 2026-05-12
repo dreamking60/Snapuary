@@ -7,9 +7,61 @@ struct MediaAsset: Codable, Identifiable, Hashable {
     var createdAt: Date
     var addedAt: Date
     var tags: [MediaTag]
+    var orbitIDs: [String]
     var kind: MediaAssetKind
     var screenshotRule: ScreenshotRetentionRule?
     var isProtectedFromCleanup: Bool
+
+    init(
+        id: UUID,
+        libraryIdentifier: String?,
+        title: String,
+        createdAt: Date,
+        addedAt: Date,
+        tags: [MediaTag],
+        orbitIDs: [String] = [],
+        kind: MediaAssetKind,
+        screenshotRule: ScreenshotRetentionRule?,
+        isProtectedFromCleanup: Bool
+    ) {
+        self.id = id
+        self.libraryIdentifier = libraryIdentifier
+        self.title = title
+        self.createdAt = createdAt
+        self.addedAt = addedAt
+        self.tags = tags
+        self.orbitIDs = orbitIDs
+        self.kind = kind
+        self.screenshotRule = screenshotRule
+        self.isProtectedFromCleanup = isProtectedFromCleanup
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case libraryIdentifier
+        case title
+        case createdAt
+        case addedAt
+        case tags
+        case orbitIDs
+        case kind
+        case screenshotRule
+        case isProtectedFromCleanup
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        libraryIdentifier = try container.decodeIfPresent(String.self, forKey: .libraryIdentifier)
+        title = try container.decode(String.self, forKey: .title)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        addedAt = try container.decode(Date.self, forKey: .addedAt)
+        tags = try container.decodeIfPresent([MediaTag].self, forKey: .tags) ?? []
+        orbitIDs = try container.decodeIfPresent([String].self, forKey: .orbitIDs) ?? []
+        kind = try container.decode(MediaAssetKind.self, forKey: .kind)
+        screenshotRule = try container.decodeIfPresent(ScreenshotRetentionRule.self, forKey: .screenshotRule)
+        isProtectedFromCleanup = try container.decodeIfPresent(Bool.self, forKey: .isProtectedFromCleanup) ?? false
+    }
 
     var isScreenshot: Bool {
         kind == .systemScreenshot || kind == .importedScreenshotLike

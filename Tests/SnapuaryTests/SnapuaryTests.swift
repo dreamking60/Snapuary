@@ -166,6 +166,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -218,6 +219,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -243,6 +245,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -259,6 +262,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -358,6 +362,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: metadataStore,
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -472,6 +477,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -503,6 +509,7 @@ final class SnapuaryTests: XCTestCase {
             assetIndexCache: InMemoryMediaAssetIndexCache(),
             metadataService: InMemoryMediaAssetMetadataStore(),
             tagCatalogStore: InMemoryTagCatalogStore(),
+            orbitLibraryStore: InMemoryOrbitLibraryStore(),
             expirationService: MockScreenshotExpirationService(),
             cleanupSchedulingService: InMemoryCleanupSchedulingService()
         )
@@ -568,6 +575,18 @@ actor InMemoryTagCatalogStore: TagCatalogServing {
 
     func saveEntries(_ entries: [TagLibraryEntry]) async throws {
         self.entries = entries
+    }
+}
+
+actor InMemoryOrbitLibraryStore: OrbitLibraryServing {
+    private var snapshot = OrbitLibrarySnapshot(collections: [], history: [])
+
+    func loadLibrary() async throws -> OrbitLibrarySnapshot {
+        snapshot
+    }
+
+    func saveLibrary(_ snapshot: OrbitLibrarySnapshot) async throws {
+        self.snapshot = snapshot
     }
 }
 

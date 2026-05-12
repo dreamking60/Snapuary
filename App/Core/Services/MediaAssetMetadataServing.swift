@@ -9,12 +9,45 @@ protocol MediaAssetMetadataServing {
 struct MediaAssetMetadataRecord: Codable, Hashable {
     var isImportedScreenshotLike: Bool
     var tags: [MediaTag]
+    var orbitIDs: [String]
     var screenshotRule: ScreenshotRetentionRule?
     var isProtectedFromCleanup: Bool
+
+    init(
+        isImportedScreenshotLike: Bool,
+        tags: [MediaTag],
+        orbitIDs: [String] = [],
+        screenshotRule: ScreenshotRetentionRule?,
+        isProtectedFromCleanup: Bool
+    ) {
+        self.isImportedScreenshotLike = isImportedScreenshotLike
+        self.tags = tags
+        self.orbitIDs = orbitIDs
+        self.screenshotRule = screenshotRule
+        self.isProtectedFromCleanup = isProtectedFromCleanup
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isImportedScreenshotLike
+        case tags
+        case orbitIDs
+        case screenshotRule
+        case isProtectedFromCleanup
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isImportedScreenshotLike = try container.decodeIfPresent(Bool.self, forKey: .isImportedScreenshotLike) ?? false
+        tags = try container.decodeIfPresent([MediaTag].self, forKey: .tags) ?? []
+        orbitIDs = try container.decodeIfPresent([String].self, forKey: .orbitIDs) ?? []
+        screenshotRule = try container.decodeIfPresent(ScreenshotRetentionRule.self, forKey: .screenshotRule)
+        isProtectedFromCleanup = try container.decodeIfPresent(Bool.self, forKey: .isProtectedFromCleanup) ?? false
+    }
 
     static let empty = MediaAssetMetadataRecord(
         isImportedScreenshotLike: false,
         tags: [],
+        orbitIDs: [],
         screenshotRule: nil,
         isProtectedFromCleanup: false
     )

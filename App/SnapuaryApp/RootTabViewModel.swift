@@ -22,6 +22,7 @@ final class RootTabViewModel {
             assetIndexCache: container.assetIndexCache,
             metadataService: container.metadataService,
             tagCatalogStore: container.tagCatalogStore,
+            orbitLibraryStore: container.orbitLibraryStore,
             expirationService: container.expirationService,
             cleanupSchedulingService: container.cleanupSchedulingService,
             autoTagSuggestionService: container.autoTagSuggestionService
@@ -30,5 +31,31 @@ final class RootTabViewModel {
 
     func makeLibraryViewModel() -> LibraryHomeViewModel {
         libraryViewModel
+    }
+
+    func handlePendingRouteIfNeeded() {
+        guard let route = AppRouteStore.shared.consumePendingRoute() else {
+            return
+        }
+
+        selectedTab = .cleanup
+
+        switch route {
+        case let .orbit(orbitID):
+            libraryViewModel.focusOrbit(orbitID)
+            libraryViewModel.activateRecipe(nil)
+        case let .recipe(recipeID):
+            guard let recipe = OrbitRecipeKind(rawValue: recipeID) else {
+                return
+            }
+            libraryViewModel.activateRecipe(recipe)
+            if let orbitID = libraryViewModel.recipeCollections.first(where: { $0.recipe == recipe })?.id {
+                libraryViewModel.focusOrbit(orbitID)
+            }
+            libraryViewModel.cleanupReviewMode = recipe == .clearScreenshots ? .screenshots : .allPhotos
+        case .latestScreenshots:
+            libraryViewModel.cleanupReviewMode = .screenshots
+            libraryViewModel.activateRecipe(nil)
+        }
     }
 }

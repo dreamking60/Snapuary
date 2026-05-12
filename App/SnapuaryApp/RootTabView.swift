@@ -31,11 +31,15 @@ struct RootTabView: View {
                 }
                 .tag(RootTab.library)
         }
+        .task {
+            viewModel.handlePendingRouteIfNeeded()
+        }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else {
                 return
             }
 
+            viewModel.handlePendingRouteIfNeeded()
             Task {
                 await viewModel.makeLibraryViewModel().handleAppDidBecomeActive()
             }
