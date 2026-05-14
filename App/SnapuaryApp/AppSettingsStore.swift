@@ -78,7 +78,7 @@ final class AppSettingsStore {
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
         self.preferredLanguage = AppLanguageOption(rawValue: userDefaults.string(forKey: AppLanguageOption.userDefaultsKey) ?? "") ?? .system
-        self.preferredLaunchTab = RootTab(storageValue: userDefaults.string(forKey: Keys.preferredLaunchTab)) ?? .cleanup
+        self.preferredLaunchTab = RootTab(storageValue: userDefaults.string(forKey: Keys.preferredLaunchTab)) ?? .orbit
         self.preferredCleanupReviewMode = CleanupReviewMode(rawValue: userDefaults.string(forKey: Keys.preferredCleanupReviewMode) ?? "") ?? .screenshots
     }
 
@@ -125,8 +125,10 @@ extension RootTab {
             "library"
         case .tags:
             "tags"
+        case .orbit:
+            "orbit"
         case .cleanup:
-            "cleanup"
+            "cleanupReview"
         }
     }
 
@@ -136,7 +138,9 @@ extension RootTab {
             self = .library
         case "tags":
             self = .tags
-        case "cleanup":
+        case "orbit", "cleanup":
+            self = .orbit
+        case "cleanupReview":
             self = .cleanup
         default:
             return nil

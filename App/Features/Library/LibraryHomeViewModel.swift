@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import Photos
 
+/// Library-wide collection filters used by the browse tab.
 enum LibraryCollection: String, CaseIterable, Hashable, Identifiable {
     case all
     case screenshots
@@ -21,6 +22,7 @@ enum LibraryCollection: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
+/// Review scopes available in the cleanup flow.
 enum CleanupReviewMode: String, CaseIterable, Hashable, Identifiable {
     case screenshots
     case allPhotos
@@ -37,6 +39,7 @@ enum CleanupReviewMode: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
+/// Lightweight tag summary used by pickers, orbit rails, and editor sheets.
 struct TagLibraryEntry: Codable, Identifiable, Hashable {
     let id: String
     let name: String
@@ -47,6 +50,7 @@ struct TagLibraryEntry: Codable, Identifiable, Hashable {
 
 @MainActor
 @Observable
+/// Central state container that coordinates photo loading, local metadata, cleanup, tags, and Orbit workflows.
 final class LibraryHomeViewModel {
     private enum LoadScope {
         case browsing
@@ -115,6 +119,7 @@ final class LibraryHomeViewModel {
     private var metadataTagEntries: [TagLibraryEntry] = []
     private let photoLibraryChangeObserver = PhotoLibraryChangeObserverProxy()
 
+    /// Creates the library view model with all data sources and persistence services it needs to keep the UI in sync.
     init(
         photoLibraryService: PhotoLibraryServing,
         thumbnailStore: PhotoLibraryThumbnailStore = .empty,
@@ -143,10 +148,12 @@ final class LibraryHomeViewModel {
         photoLibraryChangeObserver.register()
     }
 
+    /// Releases the Photos observer when the view model leaves memory.
     deinit {
         photoLibraryChangeObserver.unregister()
     }
 
+    /// Reports the current paging progress for library scans.
     var loadProgress: Double {
         guard totalAssetCount > 0 else {
             return 0
@@ -155,10 +162,12 @@ final class LibraryHomeViewModel {
         return min(Double(loadedAssetCount) / Double(totalAssetCount), 1)
     }
 
+    /// Returns whether more assets are still available from the current PhotoKit snapshot.
     var hasMoreAssetsToLoad: Bool {
         loadedAssetCount < totalAssetCount
     }
 
+    /// Loads only the initial browsing slice used by the Library tab.
     func loadForBrowsing() async {
         await hydrateCacheIfNeeded()
         guard !hasSynchronizedBrowsingThisLaunch else {
@@ -168,6 +177,7 @@ final class LibraryHomeViewModel {
         hasSynchronizedBrowsingThisLaunch = true
     }
 
+    /// Loads the complete library snapshot used by tags, cleanup, and deeper review flows.
     func load() async {
         await hydrateCacheIfNeeded()
         guard !hasSynchronizedCompleteThisLaunch else {
@@ -178,11 +188,13 @@ final class LibraryHomeViewModel {
         hasSynchronizedCompleteThisLaunch = true
     }
 
+    /// Revalidates the cached library snapshot when the app returns to the foreground.
     func handleAppDidBecomeActive() async {
         let scope: LoadScope = hasLoadedCompleteLibrary ? .complete : .browsing
         await refreshForExternalLibraryChange(scope: scope)
     }
 
+    /// Requests the next page when the browse grid approaches the end of the currently loaded assets.
     func loadMoreIfNeeded(visibleIndex _: Int) async {
         guard hasMoreAssetsToLoad,
               !isLoading,
@@ -193,6 +205,7 @@ final class LibraryHomeViewModel {
         await loadNextPage(pageSize: browsingPageSize)
     }
 
+    /// Promotes the current session from paged browsing data to a complete in-memory library snapshot.
     func ensureFullLibraryLoaded() async {
         await hydrateCacheIfNeeded()
         if hasLoadedCompleteLibrary && hasSynchronizedCompleteThisLaunch {
@@ -209,6 +222,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Prepares cleanup state, reminder permissions, and any deferred full-library synchronization.
     func prepareCleanupData() async {
         await hydrateCacheIfNeeded()
         authorizationStatus = photoLibraryService.authorizationStatus()
@@ -229,6 +243,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Requests Photos access and loads only the browse-friendly first pages if permission is granted.
     func requestPhotoLibraryAccessForBrowsing() async {
         authorizationStatus = await photoLibraryService.requestAuthorization()
         if authorizationStatus.canReadAssets {
@@ -238,6 +253,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Requests Photos access and loads the full library if permission is granted.
     func requestPhotoLibraryAccess() async {
         authorizationStatus = await photoLibraryService.requestAuthorization()
         if authorizationStatus.canReadAssets {
@@ -247,6 +263,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Returns the distinct set of tags currently attached to loaded assets.
     var availableTags: [MediaTag] {
         let tags = assets.flatMap(\.tags)
         var seen = Set<String>()
@@ -255,6 +272,7 @@ final class LibraryHomeViewModel {
             .filter { seen.insert($0.normalizedName).inserted }
     }
 
+    /// Merges in-memory tags, metadata tags, and saved templates into a single reusable tag catalog.
     var tagLibrary: [TagLibraryEntry] {
         mergeTagEntries([
             derivedTagEntries(from: assets),
@@ -263,6 +281,7 @@ final class LibraryHomeViewModel {
         ])
     }
 
+    /// Counts how many assets currently belong to each Orbit collection.
     var orbitAssetCounts: [String: Int] {
         Dictionary(grouping: assets.flatMap { asset in
             asset.orbitIDs.map { ($0, asset.id) }
@@ -271,10 +290,12 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Asks the suggestion engine for tag ideas based on the current asset and loaded library context.
     func autoTagSuggestions(for asset: MediaAsset) async -> [AutoTagSuggestion] {
         await autoTagSuggestionService.suggestions(for: asset, within: assets)
     }
 
+    /// Builds Smart Orbit placement suggestions by testing the asset against every Orbit rule.
     func orbitSuggestions(for asset: MediaAsset) -> [OrbitSuggestion] {
         orbitCollections.compactMap { orbit in
             guard let rule = orbit.autoRule else {
@@ -294,10 +315,12 @@ final class LibraryHomeViewModel {
         .sorted { $0.confidence > $1.confidence }
     }
 
+    /// Returns Orbit collections that double as quick review recipes.
     var recipeCollections: [OrbitCollection] {
         orbitCollections.filter { $0.recipe != nil }
     }
 
+    /// Aggregates this week's Orbit, keep, and delete actions for recap surfaces.
     var weeklyOrbitRecap: OrbitWeeklyRecap {
         let calendar = Calendar.current
         let weekStart = calendar.dateInterval(of: .weekOfYear, for: .now)?.start ?? .now
@@ -321,6 +344,7 @@ final class LibraryHomeViewModel {
         )
     }
 
+    /// Groups nearby captures into small review clusters for future batch-oriented review features.
     var clusterReviewGroups: [OrbitReviewCluster] {
         let sortedAssets = cleanupReviewQueue.sorted { $0.createdAt > $1.createdAt }
         guard !sortedAssets.isEmpty else {
@@ -364,20 +388,24 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Applies the active search text and selected tag filter to the loaded library.
     var filteredAssets: [MediaAsset] {
         assets
             .filter { matchesSelectedTag(asset: $0) }
             .filter { matchesSearchText(asset: $0) }
     }
 
+    /// Returns only screenshot-like assets that survive the current filters.
     var screenshotAssets: [MediaAsset] {
         filteredAssets.filter(\.isScreenshot)
     }
 
+    /// Returns only non-screenshot photo assets that survive the current filters.
     var nonScreenshotAssets: [MediaAsset] {
         filteredAssets.filter { !$0.isScreenshot }
     }
 
+    /// Resolves the final visible asset set for the Library grid after collection filtering.
     var visibleAssets: [MediaAsset] {
         switch selectedCollection {
         case .all:
@@ -389,14 +417,17 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Finds screenshot assets that still need manual organization.
     var untaggedScreenshotAssets: [MediaAsset] {
         screenshotAssets.filter { $0.tags.isEmpty && !$0.isProtectedFromCleanup }
     }
 
+    /// Finds screenshot assets that have already been labeled.
     var taggedScreenshotAssets: [MediaAsset] {
         screenshotAssets.filter { !$0.tags.isEmpty }
     }
 
+    /// Produces the current cleanup review queue after protection and recipe filters are applied.
     var cleanupReviewQueue: [MediaAsset] {
         let baseAssets: [MediaAsset]
 
@@ -414,24 +445,29 @@ final class LibraryHomeViewModel {
         return baseAssets.filter { matchesRecipe($0, recipe: activeRecipe) }
     }
 
+    /// Returns the size of the staged deletion batch.
     var pendingDeletionCount: Int {
         pendingDeletionAssets.count
     }
 
+    /// Exposes the maximum number of assets that can be staged before committing a delete batch.
     var pendingDeletionLimit: Int {
         reviewDeletionBatchLimit
     }
 
+    /// Returns the most recently staged deletion candidate for lightweight UI feedback.
     var lastPendingDeletionAsset: MediaAsset? {
         pendingDeletionAssets.last
     }
 
+    /// Returns all currently loaded assets that use the supplied tag library entry.
     func assets(for tagEntry: TagLibraryEntry) -> [MediaAsset] {
         assets.filter { asset in
             asset.tags.contains { $0.normalizedName == tagEntry.normalizedName }
         }
     }
 
+    /// Returns assets assigned to a specific Orbit, sorted newest first.
     func assets(in orbitID: String?) -> [MediaAsset] {
         guard let orbitID else {
             return []
@@ -442,14 +478,17 @@ final class LibraryHomeViewModel {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    /// Selects the active Orbit used by the Orbit rail and drag target.
     func focusOrbit(_ orbitID: String?) {
         focusedOrbitID = orbitID
     }
 
+    /// Selects or clears the active review recipe that narrows the review queue.
     func activateRecipe(_ recipe: OrbitRecipeKind?) {
         activeRecipe = recipe
     }
 
+    /// Toggles a tag chip in the browse filter strip.
     func toggleTag(_ tag: MediaTag) {
         if selectedTag?.normalizedName == tag.normalizedName {
             selectedTag = nil
@@ -458,11 +497,13 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Clears search and tag filters in the browse experience.
     func clearFilters() {
         searchText = ""
         selectedTag = nil
     }
 
+    /// Toggles the local protection flag that prevents an asset from appearing in cleanup review.
     func toggleProtection(for asset: MediaAsset) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -473,6 +514,7 @@ final class LibraryHomeViewModel {
         recalculateCleanupState()
     }
 
+    /// Marks an asset as protected and records the action in Orbit history for recap surfaces.
     func protectFromCleanup(_ asset: MediaAsset) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -495,6 +537,7 @@ final class LibraryHomeViewModel {
         recalculateCleanupState()
     }
 
+    /// Switches a normal photo in or out of the imported-screenshot workflow.
     func toggleImportedScreenshotLike(for asset: MediaAsset) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -516,6 +559,7 @@ final class LibraryHomeViewModel {
         recalculateCleanupState()
     }
 
+    /// Applies a screenshot retention rule and persists the update to local metadata storage.
     func applyRetentionRule(_ rule: ScreenshotRetentionRule, to asset: MediaAsset) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -526,6 +570,7 @@ final class LibraryHomeViewModel {
         recalculateCleanupState()
     }
 
+    /// Creates a brand-new tag on a specific asset and saves it as a reusable template.
     func addTag(name: String, colorHex: String, to asset: MediaAsset) async {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty,
@@ -545,6 +590,7 @@ final class LibraryHomeViewModel {
         await persistMetadata(for: assets[index])
     }
 
+    /// Adds several existing tag templates to a single asset in one pass.
     func addTags(_ tags: [TagLibraryEntry], to asset: MediaAsset) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -568,6 +614,7 @@ final class LibraryHomeViewModel {
         await persistMetadata(for: assets[index])
     }
 
+    /// Removes a tag from the asset and clears the active browse filter if it referenced the removed tag.
     func removeTag(_ tag: MediaTag, from asset: MediaAsset) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -580,6 +627,7 @@ final class LibraryHomeViewModel {
         await persistMetadata(for: assets[index])
     }
 
+    /// Renames a tag everywhere it appears across loaded assets and saved tag templates.
     func renameTag(_ tagEntry: TagLibraryEntry, to newName: String) async {
         let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
@@ -638,6 +686,7 @@ final class LibraryHomeViewModel {
         await renameSavedTagEntry(from: oldNormalizedName, to: trimmedName, colorHex: tagEntry.colorHex)
     }
 
+    /// Deletes a tag from every loaded asset and from the saved catalog.
     func deleteTag(_ tagEntry: TagLibraryEntry) async {
         let normalizedName = tagEntry.normalizedName
         var updatedIndexes: [Int] = []
@@ -660,6 +709,7 @@ final class LibraryHomeViewModel {
         await removeSavedTagEntry(normalizedName: normalizedName)
     }
 
+    /// Rewrites every use of one tag so it points at another destination tag.
     func mergeTag(_ source: TagLibraryEntry, into destination: TagLibraryEntry) async {
         guard source.normalizedName != destination.normalizedName else {
             return
@@ -710,6 +760,7 @@ final class LibraryHomeViewModel {
         await saveTagTemplate(name: destination.name, colorHex: destination.colorHex)
     }
 
+    /// Creates a standalone reusable tag template without requiring an asset editor flow.
     func createTagTemplate(name: String, colorHex: String = "#4F7CAC") async -> TagLibraryEntry? {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
@@ -720,6 +771,7 @@ final class LibraryHomeViewModel {
         return tagLibrary.first(where: { $0.normalizedName == trimmedName.lowercased() })
     }
 
+    /// Creates a new Orbit collection with optional recipe and smart-classification rule metadata.
     func createOrbit(
         name: String,
         colorHex: String = "#4F7CAC",
@@ -753,6 +805,7 @@ final class LibraryHomeViewModel {
         return orbit
     }
 
+    /// Assigns an asset to an Orbit, updates its cover if needed, and persists the change locally.
     func assignAsset(_ asset: MediaAsset, to orbitID: String) async {
         guard let index = assets.firstIndex(where: { $0.id == asset.id }) else {
             return
@@ -779,6 +832,7 @@ final class LibraryHomeViewModel {
         await persistOrbitLibrary()
     }
 
+    /// Executes automatic cleanup rules by deleting every currently expired cleanup candidate.
     func runCleanupNow() async {
         guard !isRunningCleanup else {
             return
@@ -818,6 +872,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Immediately attempts to delete a single asset from Photos and local metadata storage.
     func deleteAssetImmediately(_ asset: MediaAsset) async -> Bool {
         guard let libraryIdentifier = asset.libraryIdentifier else {
             return false
@@ -857,6 +912,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Removes an asset from the review queue and places it into the staged deletion batch.
     @discardableResult
     func stageAssetForDeletion(_ asset: MediaAsset) -> Bool {
         guard pendingDeletionAssets.count < reviewDeletionBatchLimit else {
@@ -874,6 +930,7 @@ final class LibraryHomeViewModel {
         return true
     }
 
+    /// Commits the current staged deletion batch to Photos and restores local state if the delete fails.
     @discardableResult
     func commitPendingDeletions() async -> Bool {
         guard !pendingDeletionAssets.isEmpty else {
@@ -922,6 +979,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Restores the most recently staged asset back into the local review queue.
     func undoLastStagedDeletion() {
         guard let pendingDeletionAsset = pendingDeletionAssets.popLast() else {
             return
@@ -931,15 +989,18 @@ final class LibraryHomeViewModel {
         cleanupReviewMessage = nil
     }
 
+    /// Clears the latest non-fatal cleanup review message.
     func dismissCleanupReviewMessage() {
         cleanupReviewMessage = nil
     }
 
+    /// Dismisses the automatic cleanup prompt for the remainder of the current app session.
     func dismissCleanupPrompt() {
         shouldPromptForCleanup = false
         hasPromptedForCleanupThisSession = true
     }
 
+    /// Supplies the dynamic title used by the cleanup prompt alert.
     var cleanupPromptTitle: String {
         if cleanupCandidates.count == 1 {
             return L10n.text("cleanup.prompt_title_one", fallback: "Ready to Clean 1 Screenshot?")
@@ -948,10 +1009,12 @@ final class LibraryHomeViewModel {
         return L10n.text("cleanup.prompt_title_many", fallback: "Ready to Clean %lld Screenshots?", cleanupCandidates.count)
     }
 
+    /// Supplies the explanatory body used by the cleanup prompt alert.
     var cleanupPromptMessage: String {
         L10n.text("cleanup.prompt_message", fallback: "Snapuary found expired screenshots in the system Photos library. Confirm to delete them now.")
     }
 
+    /// Requests notification permission and schedules the next reminder if permission is granted.
     func requestCleanupReminderPermission() async {
         cleanupReminderStatus = await cleanupSchedulingService.requestAuthorization()
         if cleanupReminderStatus.canSchedule {
@@ -959,6 +1022,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Schedules the next cleanup reminder based on the current library state.
     func scheduleNextCleanupReminder() async {
         guard !isSchedulingReminder else {
             return
@@ -977,6 +1041,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Converts a Photos authorization status into user-facing guidance text.
     private func authorizationMessage(for status: PhotoLibraryAuthorizationStatus) -> String {
         switch status {
         case .notDetermined:
@@ -992,6 +1057,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Reloads library state for either the lightweight browsing scope or the complete full-library scope.
     private func load(scope: LoadScope) async {
         authorizationStatus = photoLibraryService.authorizationStatus()
         cleanupReminderStatus = await cleanupSchedulingService.authorizationStatus()
@@ -1053,6 +1119,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Fetches the next page of assets and appends it in smaller chunks to keep the UI responsive.
     private func loadNextPage(pageSize: Int) async {
         guard totalAssetCount > 0,
               currentOffset < totalAssetCount else {
@@ -1098,6 +1165,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Hydrates the in-memory model from the persisted snapshot before the first live PhotoKit fetch.
     private func hydrateCacheIfNeeded() async {
         guard !hasHydratedCache else {
             return
@@ -1125,6 +1193,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Evaluates whether an asset matches the active tag filter.
     private func matchesSelectedTag(asset: MediaAsset) -> Bool {
         guard let selectedTag else {
             return true
@@ -1133,6 +1202,7 @@ final class LibraryHomeViewModel {
         return asset.tags.contains { $0.normalizedName == selectedTag.normalizedName }
     }
 
+    /// Evaluates whether an asset matches the current free-text search.
     private func matchesSearchText(asset: MediaAsset) -> Bool {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
@@ -1144,6 +1214,7 @@ final class LibraryHomeViewModel {
             || asset.kind.displayName.localizedCaseInsensitiveContains(query)
     }
 
+    /// Saves all app-owned metadata for one asset and refreshes derived state afterward.
     private func persistMetadata(for asset: MediaAsset) async {
         guard let libraryIdentifier = asset.libraryIdentifier else {
             return
@@ -1167,12 +1238,14 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Rebuilds all cleanup-specific derived state from the current asset list.
     private func recalculateCleanupState() {
         loadedAssetCount = assets.count
         cleanupScopedAssets = assets.filter(\.isScreenshot)
         refreshCleanupStateFromScopedAssets()
     }
 
+    /// Updates whether the app should surface the automatic cleanup prompt in this session.
     private func updateCleanupPromptState() {
         guard !hasPromptedForCleanupThisSession else {
             shouldPromptForCleanup = false
@@ -1182,6 +1255,7 @@ final class LibraryHomeViewModel {
         shouldPromptForCleanup = !cleanupCandidates.isEmpty
     }
 
+    /// Saves the current library snapshot so future launches can bootstrap quickly.
     private func persistSnapshot() async {
         guard let cachedFingerprint else {
             return
@@ -1201,12 +1275,14 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Recomputes cleanup summary values from the current screenshot-scoped asset subset.
     private func refreshCleanupStateFromScopedAssets() {
         cleanupSummary = expirationService.upcomingCleanupSummary(for: cleanupScopedAssets)
         cleanupCandidates = expirationService.cleanupCandidates(from: cleanupScopedAssets, now: .now)
         updateCleanupPromptState()
     }
 
+    /// Loads Orbit collections and history from persistence on first demand.
     private func hydrateOrbitLibraryIfNeeded() async {
         guard !hasHydratedOrbitLibrary else {
             return
@@ -1216,6 +1292,7 @@ final class LibraryHomeViewModel {
         await refreshOrbitLibrary()
     }
 
+    /// Loads tag metadata sources from disk on first demand.
     private func hydrateTagSourcesIfNeeded() async {
         guard !hasHydratedTagSources else {
             return
@@ -1225,6 +1302,7 @@ final class LibraryHomeViewModel {
         await refreshTagSources()
     }
 
+    /// Refreshes derived tag sources from metadata storage and the saved tag catalog.
     private func refreshTagSources() async {
         do {
             let metadata = try await metadataService.fetchAllMetadata()
@@ -1240,6 +1318,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Loads Orbit collections and session history from persistent storage.
     private func refreshOrbitLibrary() async {
         do {
             let snapshot = try await orbitLibraryStore.loadLibrary()
@@ -1251,6 +1330,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Persists the current Orbit collections and truncated session history snapshot.
     private func persistOrbitLibrary() async {
         do {
             try await orbitLibraryStore.saveLibrary(
@@ -1264,6 +1344,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Appends one Orbit session event while keeping the history buffer bounded.
     private func recordOrbitEvent(_ event: OrbitSessionEvent) {
         orbitHistory.append(event)
         if orbitHistory.count > 500 {
@@ -1271,6 +1352,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Saves or updates a reusable tag template that can be offered in editors and Orbit flows.
     private func saveTagTemplate(name: String, colorHex: String) async {
         let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !normalizedName.isEmpty else {
@@ -1301,11 +1383,13 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Renames a saved tag template by removing the old entry and writing a new one.
     private func renameSavedTagEntry(from normalizedName: String, to newName: String, colorHex: String) async {
         savedTagCatalogEntries.removeAll { $0.normalizedName == normalizedName }
         await saveTagTemplate(name: newName, colorHex: colorHex)
     }
 
+    /// Removes a saved tag template from the persistent catalog.
     private func removeSavedTagEntry(normalizedName: String) async {
         savedTagCatalogEntries.removeAll { $0.normalizedName == normalizedName }
 
@@ -1316,10 +1400,12 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Converts all tags attached to the supplied assets into summary entries.
     private func derivedTagEntries(from assets: [MediaAsset]) -> [TagLibraryEntry] {
         derivedTagEntries(from: assets.flatMap(\.tags))
     }
 
+    /// Converts raw `MediaTag` values into aggregated library entries.
     private func derivedTagEntries(from tags: [MediaTag]) -> [TagLibraryEntry] {
         var summary: [String: (name: String, colorHex: String, usageCount: Int)] = [:]
 
@@ -1342,6 +1428,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Merges multiple tag-entry sources into a single sorted library representation.
     private func mergeTagEntries(_ groups: [[TagLibraryEntry]]) -> [TagLibraryEntry] {
         var summary: [String: (name: String, colorHex: String, usageCount: Int)] = [:]
 
@@ -1375,6 +1462,7 @@ final class LibraryHomeViewModel {
             }
     }
 
+    /// Removes an asset from all local arrays after it has been staged or deleted.
     private func removeAssetFromLocalState(_ asset: MediaAsset) {
         assets.removeAll { $0.id == asset.id }
         cleanupScopedAssets.removeAll { $0.id == asset.id }
@@ -1384,6 +1472,7 @@ final class LibraryHomeViewModel {
         refreshCleanupStateFromScopedAssets()
     }
 
+    /// Re-inserts an asset into local arrays using creation date order after an undo or failed deletion.
     private func insertAssetBackIntoLocalState(_ asset: MediaAsset) {
         let insertIndex = assets.firstIndex { existing in
             asset.createdAt > existing.createdAt
@@ -1403,6 +1492,7 @@ final class LibraryHomeViewModel {
         refreshCleanupStateFromScopedAssets()
     }
 
+    /// Restores a failed staged-deletion batch back into the review queue.
     private func restorePendingDeletionAssets(_ stagedAssets: [MediaAsset]) {
         pendingDeletionAssets.removeAll()
 
@@ -1413,6 +1503,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Tracks the cumulative number of assets deleted through Snapuary.
     private func recordCleanupDeletion(count: Int) {
         guard count > 0 else {
             return
@@ -1422,6 +1513,7 @@ final class LibraryHomeViewModel {
         UserDefaults.standard.set(totalCleanupDeletedCount, forKey: cleanupDeletionCountKey)
     }
 
+    /// Starts a background full-library sync used by cleanup-specific screens if one is not already running.
     private func startCleanupSyncIfNeeded() {
         guard cleanupSyncTask == nil else {
             return
@@ -1439,6 +1531,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Responds to system Photos change callbacks by scheduling a scoped refresh on the main actor.
     private func handleObservedPhotoLibraryChange() {
         Task { [weak self] in
             guard let self else {
@@ -1451,6 +1544,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Compares the latest PhotoKit fingerprint against the cached fingerprint before deciding to reload.
     private func refreshForExternalLibraryChange(scope: LoadScope) async {
         guard hasHydratedCache || !assets.isEmpty || authorizationStatus.canReadAssets else {
             return
@@ -1475,6 +1569,7 @@ final class LibraryHomeViewModel {
         await reloadAfterLibraryMutation(scope: scope)
     }
 
+    /// Clears synchronization flags and reloads the library after an external mutation or delete.
     private func reloadAfterLibraryMutation(scope: LoadScope) async {
         hasSynchronizedBrowsingThisLaunch = false
         hasSynchronizedCompleteThisLaunch = false
@@ -1483,6 +1578,7 @@ final class LibraryHomeViewModel {
         markScopeAsSynchronized(scope)
     }
 
+    /// Marks the supplied load scope as synchronized for the current launch.
     private func markScopeAsSynchronized(_ scope: LoadScope) {
         if scope == .complete {
             hasSynchronizedBrowsingThisLaunch = true
@@ -1492,6 +1588,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Clears all in-memory library state and derived cleanup values.
     private func resetLibraryState() {
         assets = []
         cleanupScopedAssets = []
@@ -1510,6 +1607,7 @@ final class LibraryHomeViewModel {
         cleanupCandidates = []
     }
 
+    /// Tests whether a Smart Orbit rule matches the supplied asset and returns a ranked explanation if it does.
     private func smartOrbitMatch(
         for asset: MediaAsset,
         rule: SmartOrbitRule
@@ -1585,6 +1683,7 @@ final class LibraryHomeViewModel {
         }
     }
 
+    /// Evaluates whether an asset belongs to one of the recipe-driven Orbit review queues.
     private func matchesRecipe(_ asset: MediaAsset, recipe: OrbitRecipeKind) -> Bool {
         switch recipe {
         case .clearScreenshots:
@@ -1603,10 +1702,12 @@ final class LibraryHomeViewModel {
     }
 }
 
+/// Small proxy object that forwards Photos library change callbacks into async view-model refreshes.
 private final class PhotoLibraryChangeObserverProxy: NSObject, PHPhotoLibraryChangeObserver {
     var onChange: (() -> Void)?
     private var isRegistered = false
 
+    /// Registers the proxy with `PHPhotoLibrary` once per lifecycle.
     func register() {
         guard !isRegistered else {
             return
@@ -1616,6 +1717,7 @@ private final class PhotoLibraryChangeObserverProxy: NSObject, PHPhotoLibraryCha
         isRegistered = true
     }
 
+    /// Unregisters the proxy from `PHPhotoLibrary`.
     func unregister() {
         guard isRegistered else {
             return
@@ -1625,6 +1727,7 @@ private final class PhotoLibraryChangeObserverProxy: NSObject, PHPhotoLibraryCha
         isRegistered = false
     }
 
+    /// Forwards PhotoKit change notifications to the view model.
     func photoLibraryDidChange(_ changeInstance: PHChange) {
         onChange?()
     }

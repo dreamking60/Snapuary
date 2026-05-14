@@ -19,9 +19,15 @@ struct RootTabView: View {
                 }
                 .tag(RootTab.tags)
 
+            OrbitHomeView(viewModel: viewModel.makeLibraryViewModel())
+                .tabItem {
+                    Label(L10n.text("tab.orbit", fallback: "Orbit"), systemImage: "circle.hexagongrid.fill")
+                }
+                .tag(RootTab.orbit)
+
             CleanupHomeView(viewModel: viewModel.makeLibraryViewModel())
                 .tabItem {
-                    Label(L10n.text("tab.cleanup", fallback: "Orbit"), systemImage: "circle.grid.2x2.fill")
+                    Label(L10n.text("tab.cleanup", fallback: "Cleanup"), systemImage: "trash")
                 }
                 .tag(RootTab.cleanup)
 

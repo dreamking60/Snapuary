@@ -1,7 +1,8 @@
 "settings.language.system" = "시스템 기본값";
 "tab.library" = "라이브러리";
 "tab.tags" = "태그";
-"tab.cleanup" = "오빗";
+"tab.orbit" = "오빗";
+"tab.cleanup" = "정리";
 "privacy.recent_signals" = "최근 위험 신호";
 "privacy.detection_strategy" = "감지 전략";
 "privacy.strategy_body" = "먼저 OCR 기반 워터마크 신호 감지를 적용하고, 이후 내부 식별자를 위한 사용자 규칙을 추가합니다.";

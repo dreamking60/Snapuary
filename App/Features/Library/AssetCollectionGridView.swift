@@ -2,12 +2,14 @@ import Photos
 import SwiftUI
 import UIKit
 
+/// UIKit-backed grid that keeps large photo collections smoother than a pure SwiftUI grid.
 struct AssetCollectionGridView: UIViewRepresentable {
     let assets: [MediaAsset]
     let thumbnailStore: PhotoLibraryThumbnailStore
     let onSelect: (MediaAsset) -> Void
     let onApproachingEnd: (Int) -> Void
 
+    /// Creates the coordinator that owns UIKit delegates and prefetch behavior.
     func makeCoordinator() -> Coordinator {
         Coordinator(
             thumbnailStore: thumbnailStore,
@@ -16,6 +18,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
         )
     }
 
+    /// Builds the underlying `UICollectionView` used for the photo grid.
     func makeUIView(context: Context) -> UICollectionView {
         let layout = UICollectionViewFlowLayout()
         layout.minimumInteritemSpacing = 3
@@ -33,12 +36,14 @@ struct AssetCollectionGridView: UIViewRepresentable {
         return collectionView
     }
 
+    /// Pushes the latest asset list and callbacks into the existing collection view.
     func updateUIView(_ collectionView: UICollectionView, context: Context) {
         context.coordinator.onSelect = onSelect
         context.coordinator.onApproachingEnd = onApproachingEnd
         context.coordinator.updateAssets(assets, in: collectionView)
     }
 
+    /// Coordinator that bridges collection view events back into SwiftUI closures.
     final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UICollectionViewDataSourcePrefetching {
         private let thumbnailStore: PhotoLibraryThumbnailStore
         fileprivate var onSelect: (MediaAsset) -> Void
@@ -47,6 +52,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
         private var assetIdentifiers: [String] = []
         private var lastTriggeredIndex = -1
 
+        /// Creates a coordinator with the shared thumbnail store and user interaction callbacks.
         init(
             thumbnailStore: PhotoLibraryThumbnailStore,
             onSelect: @escaping (MediaAsset) -> Void,
@@ -57,6 +63,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             self.onApproachingEnd = onApproachingEnd
         }
 
+        /// Reloads the collection view when the asset identity list changes.
         func updateAssets(_ newAssets: [MediaAsset], in collectionView: UICollectionView) {
             let newIdentifiers = newAssets.map(\.gridIdentifier)
             guard newIdentifiers != assetIdentifiers else {
@@ -71,10 +78,12 @@ struct AssetCollectionGridView: UIViewRepresentable {
             collectionView.reloadData()
         }
 
+        /// Returns the number of visible cells needed for the current asset array.
         func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
             assets.count
         }
 
+        /// Dequeues and configures one grid cell for the requested asset index.
         func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
             guard let cell = collectionView.dequeueReusableCell(
                 withReuseIdentifier: AssetGridCell.reuseIdentifier,
@@ -88,6 +97,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             return cell
         }
 
+        /// Sends the selected asset back to SwiftUI when the user taps a grid tile.
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
             guard assets.indices.contains(indexPath.item) else {
                 return
@@ -96,6 +106,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             onSelect(assets[indexPath.item])
         }
 
+        /// Computes a square three-column tile size for the current collection width.
         func collectionView(
             _ collectionView: UICollectionView,
             layout collectionViewLayout: UICollectionViewLayout,
@@ -106,6 +117,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             return CGSize(width: width, height: width)
         }
 
+        /// Starts thumbnail prefetching and triggers paging when prefetched rows approach the end.
         func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
             if let maxIndex = indexPaths.map(\.item).max() {
                 triggerLoadMoreIfNeeded(for: maxIndex)
@@ -129,6 +141,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             }
         }
 
+        /// Stops caching thumbnails for cells the collection view no longer expects to show soon.
         func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
             let targetSize = preheatTargetSize(for: collectionView)
             let identifiers = indexPaths.compactMap { indexPath in
@@ -148,6 +161,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             }
         }
 
+        /// Returns the pixel-accurate target size used for preheated thumbnails.
         private func preheatTargetSize(for collectionView: UICollectionView) -> CGSize {
             let scale = UIScreen.main.scale
             let totalSpacing: CGFloat = 6
@@ -155,6 +169,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
             return CGSize(width: width, height: width)
         }
 
+        /// Fires the load-more callback once scrolling gets close enough to the tail of the current data.
         private func triggerLoadMoreIfNeeded(for index: Int) {
             guard !assets.isEmpty else {
                 return
@@ -172,6 +187,7 @@ struct AssetCollectionGridView: UIViewRepresentable {
     }
 }
 
+/// One square media tile that owns its thumbnail request lifecycle.
 private final class AssetGridCell: UICollectionViewCell {
     static let reuseIdentifier = "AssetGridCell"
 
@@ -205,6 +221,7 @@ private final class AssetGridCell: UICollectionViewCell {
         representedIdentifier = nil
     }
 
+    /// Configures the cell with metadata badges and a lazily loaded thumbnail.
     func configure(asset: MediaAsset, thumbnailStore: PhotoLibraryThumbnailStore) {
         self.thumbnailStore = thumbnailStore
         representedIdentifier = asset.libraryIdentifier
@@ -239,6 +256,7 @@ private final class AssetGridCell: UICollectionViewCell {
         }
     }
 
+    /// Builds the image, gradient, title, and badge hierarchy used by the tile.
     private func setUpViews() {
         clipsToBounds = true
         contentView.clipsToBounds = true
@@ -283,6 +301,7 @@ private final class AssetGridCell: UICollectionViewCell {
         ])
     }
 
+    /// Creates a small circular badge used for screenshot and protected-state indicators.
     private func makeBadge(systemName: String) -> UIView {
         let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blurView.layer.cornerRadius = 10
@@ -303,6 +322,7 @@ private final class AssetGridCell: UICollectionViewCell {
         return blurView
     }
 
+    /// Chooses a subtle fallback tile color before the thumbnail arrives.
     private func tileBackgroundColor(for asset: MediaAsset) -> UIColor {
         asset.isScreenshot ? UIColor.systemBlue.withAlphaComponent(0.18) : UIColor.tertiarySystemBackground
     }
@@ -330,6 +350,7 @@ private final class GradientView: UIView {
 }
 
 private extension UIFont {
+    /// Returns a bold version of the current preferred font while preserving its size.
     func bold() -> UIFont {
         guard let descriptor = fontDescriptor.withSymbolicTraits(.traitBold) else {
             return self

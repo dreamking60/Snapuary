@@ -61,7 +61,8 @@ struct AppProfileSheet: View {
                         selection: $settings.preferredLaunchTab
                     ) {
                         Text(L10n.text("tab.tags", fallback: "Tags")).tag(RootTab.tags)
-                        Text(L10n.text("tab.cleanup", fallback: "Orbit")).tag(RootTab.cleanup)
+                        Text(L10n.text("tab.orbit", fallback: "Orbit")).tag(RootTab.orbit)
+                        Text(L10n.text("tab.cleanup", fallback: "Cleanup")).tag(RootTab.cleanup)
                         Text(L10n.text("tab.library", fallback: "Library")).tag(RootTab.library)
                     }
 

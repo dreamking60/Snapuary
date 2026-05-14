@@ -1,7 +1,8 @@
 "settings.language.system" = "System Default";
 "tab.library" = "Library";
 "tab.tags" = "Tags";
-"tab.cleanup" = "Orbit";
+"tab.orbit" = "Orbit";
+"tab.cleanup" = "Cleanup";
 "privacy.recent_signals" = "Recent Risk Signals";
 "privacy.detection_strategy" = "Detection Strategy";
 "privacy.strategy_body" = "Start with OCR-based watermark signal detection, then add custom rules for internal identifiers.";

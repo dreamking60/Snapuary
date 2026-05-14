@@ -1,7 +1,8 @@
 "settings.language.system" = "跟随系统";
 "tab.library" = "图库";
 "tab.tags" = "标签";
-"tab.cleanup" = "轨道";
+"tab.orbit" = "轨道";
+"tab.cleanup" = "清理";
 "privacy.recent_signals" = "最近风险信号";
 "privacy.detection_strategy" = "检测策略";
 "privacy.strategy_body" = "先使用基于 OCR 的水印信号检测，再逐步加入针对内部标识符的自定义规则。";

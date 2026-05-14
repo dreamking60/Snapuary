@@ -4,6 +4,7 @@ import Observation
 enum RootTab: Hashable {
     case library
     case tags
+    case orbit
     case cleanup
 }
 
@@ -38,13 +39,13 @@ final class RootTabViewModel {
             return
         }
 
-        selectedTab = .cleanup
-
         switch route {
         case let .orbit(orbitID):
+            selectedTab = .orbit
             libraryViewModel.focusOrbit(orbitID)
             libraryViewModel.activateRecipe(nil)
         case let .recipe(recipeID):
+            selectedTab = .orbit
             guard let recipe = OrbitRecipeKind(rawValue: recipeID) else {
                 return
             }
@@ -54,6 +55,7 @@ final class RootTabViewModel {
             }
             libraryViewModel.cleanupReviewMode = recipe == .clearScreenshots ? .screenshots : .allPhotos
         case .latestScreenshots:
+            selectedTab = .cleanup
             libraryViewModel.cleanupReviewMode = .screenshots
             libraryViewModel.activateRecipe(nil)
         }

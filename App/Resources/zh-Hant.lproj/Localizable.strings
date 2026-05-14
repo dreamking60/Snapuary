@@ -1,7 +1,8 @@
 "settings.language.system" = "跟隨系統";
 "tab.library" = "圖庫";
 "tab.tags" = "標籤";
-"tab.cleanup" = "軌道";
+"tab.orbit" = "軌道";
+"tab.cleanup" = "清理";
 "privacy.recent_signals" = "近期風險訊號";
 "privacy.detection_strategy" = "偵測策略";
 "privacy.strategy_body" = "先使用 OCR 型浮水印訊號偵測，再逐步加入針對內部識別碼的自訂規則。";

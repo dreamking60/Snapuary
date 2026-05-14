@@ -1,7 +1,8 @@
 "settings.language.system" = "システム設定";
 "tab.library" = "ライブラリ";
 "tab.tags" = "タグ";
-"tab.cleanup" = "オービット";
+"tab.orbit" = "オービット";
+"tab.cleanup" = "クリーンアップ";
 "privacy.recent_signals" = "最近のリスクシグナル";
 "privacy.detection_strategy" = "検出方針";
 "privacy.strategy_body" = "まず OCR ベースの透かし検出を行い、その後に社内識別子向けのカスタムルールを追加します。";

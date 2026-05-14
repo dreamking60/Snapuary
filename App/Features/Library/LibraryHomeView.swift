@@ -1,6 +1,7 @@
 import Photos
 import SwiftUI
 
+/// Main Library tab that combines browse filters, recap metrics, and the paged photo grid.
 struct LibraryHomeView: View {
     @Environment(AppSettingsStore.self) private var settings
     @State private var viewModel: LibraryHomeViewModel
@@ -13,6 +14,7 @@ struct LibraryHomeView: View {
         GridItem(.flexible(), spacing: 3)
     ]
 
+    /// Stores the shared view model inside local SwiftUI state so the tab can mutate it directly.
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
     }
@@ -35,6 +37,11 @@ struct LibraryHomeView: View {
                 } else {
                     VStack(spacing: 18) {
                         LibraryHeader(viewModel: viewModel)
+                        if viewModel.weeklyOrbitRecap.assignedCount > 0
+                            || viewModel.weeklyOrbitRecap.keptCount > 0
+                            || viewModel.weeklyOrbitRecap.deletedCount > 0 {
+                            OrbitRecapCard(recap: viewModel.weeklyOrbitRecap)
+                        }
                         LibraryFilterStrip(viewModel: viewModel)
                         LibraryGrid(
                             assets: viewModel.visibleAssets,
@@ -135,6 +142,7 @@ struct LibraryHomeView: View {
         }
     }
 
+    /// Re-resolves a sheet asset after the library reloads so editors keep pointing at the latest value.
     private func refreshedAsset(from asset: MediaAsset, in assets: [MediaAsset]) -> MediaAsset? {
         guard let libraryIdentifier = asset.libraryIdentifier else {
             return assets.first(where: { $0.id == asset.id })
@@ -144,7 +152,8 @@ struct LibraryHomeView: View {
     }
 }
 
-struct CleanupHomeView: View {
+/// Orbit tab that focuses on assigning photos into named Orbit collections.
+struct OrbitHomeView: View {
     @Environment(AppSettingsStore.self) private var settings
     @State private var viewModel: LibraryHomeViewModel
     @State private var selectedAsset: MediaAsset?
@@ -153,6 +162,7 @@ struct CleanupHomeView: View {
     @State private var isShowingCreateOrbit = false
     @State private var draftOrbitName = ""
 
+    /// Stores the shared view model inside local SwiftUI state for the Orbit tab.
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
     }
@@ -172,16 +182,11 @@ struct CleanupHomeView: View {
                         }
                     )
                 } else {
-                    ScreenshotSlashView(
+                    OrbitReviewView(
                         assets: viewModel.cleanupReviewQueue,
                         thumbnailStore: viewModel.thumbnailStore,
                         currentIndex: $reviewIndex,
-                        reviewMode: $viewModel.cleanupReviewMode,
                         isRefreshing: viewModel.isSyncingCleanupData,
-                        pendingDeletionCount: viewModel.pendingDeletionCount,
-                        pendingDeletionLimit: viewModel.pendingDeletionLimit,
-                        pendingDeletionPreviewAsset: viewModel.lastPendingDeletionAsset,
-                        isCommittingDeletion: viewModel.isRunningCleanup,
                         orbitCollections: viewModel.orbitCollections,
                         selectedOrbitID: Binding(
                             get: { viewModel.focusedOrbitID },
@@ -191,20 +196,11 @@ struct CleanupHomeView: View {
                         orbitAssets: viewModel.assets(in: viewModel.focusedOrbitID),
                         recipeCollections: viewModel.recipeCollections,
                         activeRecipe: viewModel.activeRecipe,
-                        weeklyRecap: viewModel.weeklyOrbitRecap,
-                        clusterGroups: viewModel.clusterReviewGroups,
                         smartSuggestionsProvider: { asset in
                             viewModel.orbitSuggestions(for: asset)
                         },
-                        onOpenDetail: { asset in
-                            selectedAsset = asset
-                        },
                         onPreview: { asset in
                             previewAsset = asset
-                        },
-                        onKeep: { asset in
-                            await viewModel.protectFromCleanup(asset)
-                            clampReviewIndex()
                         },
                         onOrbit: { asset in
                             let targetOrbitID = viewModel.focusedOrbitID
@@ -212,38 +208,30 @@ struct CleanupHomeView: View {
                                 ?? viewModel.orbitCollections.first?.id
                             if let targetOrbitID {
                                 await viewModel.assignAsset(asset, to: targetOrbitID)
-                            }
-                            await viewModel.protectFromCleanup(asset)
-                            clampReviewIndex()
-                        },
-                        onDelete: { asset in
-                            let staged = viewModel.stageAssetForDeletion(asset)
-                            if staged {
+                                await viewModel.protectFromCleanup(asset)
                                 clampReviewIndex()
+                            } else {
+                                isShowingCreateOrbit = true
                             }
-                            return staged
-                        }
-                    ) {
-                        viewModel.undoLastStagedDeletion()
-                        clampReviewIndex()
-                    } onCommitDelete: {
-                        _ = await viewModel.commitPendingDeletions()
-                        clampReviewIndex()
-                    } onCreateOrbit: {
+                        },
+                        onCreateOrbit: {
                         isShowingCreateOrbit = true
-                    } onSelectRecipe: { orbit in
+                        },
+                        onSelectRecipe: { orbit in
                         let shouldClear = viewModel.activeRecipe == orbit.recipe
                         viewModel.focusOrbit(orbit.id)
                         viewModel.activateRecipe(shouldClear ? nil : orbit.recipe)
-                    }
+                        }
+                    )
                     .padding()
                     .id(languageRefreshKey)
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
+                    .navigationTitle(L10n.text("tab.orbit", fallback: "Orbit"))
+            .navigationBarTitleDisplayMode(.inline)
             .task {
-                if viewModel.cleanupReviewMode != AppContainer.live.settingsStore.preferredCleanupReviewMode {
-                    viewModel.cleanupReviewMode = AppContainer.live.settingsStore.preferredCleanupReviewMode
+                if viewModel.cleanupReviewMode != .allPhotos {
+                    viewModel.cleanupReviewMode = .allPhotos
                 }
                 if viewModel.authorizationStatus == .notDetermined {
                     await viewModel.requestPhotoLibraryAccessForBrowsing()
@@ -263,23 +251,6 @@ struct CleanupHomeView: View {
                 if viewModel.focusedOrbitID == nil || !ids.contains(viewModel.focusedOrbitID ?? "") {
                     viewModel.focusOrbit(first)
                 }
-            }
-            .alert(
-                L10n.text("cleanup.action_title", fallback: "Cleanup Action"),
-                isPresented: Binding(
-                    get: { viewModel.cleanupReviewMessage != nil },
-                    set: { newValue in
-                        if !newValue {
-                            viewModel.dismissCleanupReviewMessage()
-                        }
-                    }
-                )
-            ) {
-                Button(L10n.text("common.ok", fallback: "OK")) {
-                    viewModel.dismissCleanupReviewMessage()
-                }
-            } message: {
-                Text(viewModel.cleanupReviewMessage ?? "")
             }
             .alert(L10n.text("orbit.create", fallback: "Create Orbit"), isPresented: $isShowingCreateOrbit) {
                 TextField(L10n.text("orbit.new_name", fallback: "New orbit"), text: $draftOrbitName)
@@ -333,6 +304,7 @@ struct CleanupHomeView: View {
         }
     }
 
+    /// Re-resolves a selected asset after a reload so sheets continue showing the current model.
     private func refreshedAsset(from asset: MediaAsset, in assets: [MediaAsset]) -> MediaAsset? {
         guard let libraryIdentifier = asset.libraryIdentifier else {
             return assets.first(where: { $0.id == asset.id })
@@ -341,6 +313,166 @@ struct CleanupHomeView: View {
         return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
     }
 
+    /// Clamps the current review index after assets leave the queue.
+    private func clampReviewIndex() {
+        let count = viewModel.cleanupReviewQueue.count
+        if count == 0 {
+            reviewIndex = 0
+        } else {
+            reviewIndex = min(reviewIndex, count - 1)
+        }
+    }
+
+    /// Advances the Orbit review cursor to the next remaining asset.
+    private func advanceReviewIndex() {
+        let count = viewModel.cleanupReviewQueue.count
+        guard count > 0 else {
+            reviewIndex = 0
+            return
+        }
+
+        reviewIndex = min(reviewIndex + 1, count - 1)
+    }
+}
+
+/// Cleanup tab that focuses only on keep, inspect, and batch-delete review actions.
+struct CleanupHomeView: View {
+    @Environment(AppSettingsStore.self) private var settings
+    @State private var viewModel: LibraryHomeViewModel
+    @State private var selectedAsset: MediaAsset?
+    @State private var previewAsset: MediaAsset?
+    @State private var reviewIndex = 0
+
+    /// Stores the shared view model inside local SwiftUI state for the cleanup tab.
+    init(viewModel: LibraryHomeViewModel) {
+        _viewModel = State(initialValue: viewModel)
+    }
+
+    var body: some View {
+        let languageRefreshKey = settings.preferredLanguage.rawValue
+        NavigationStack {
+            Group {
+                if !viewModel.authorizationStatus.canReadAssets,
+                   let message = viewModel.authorizationErrorMessage {
+                    LibraryAuthorizationView(
+                        message: message,
+                        authorizationStatus: viewModel.authorizationStatus,
+                        onRequestAccess: {
+                            await viewModel.requestPhotoLibraryAccessForBrowsing()
+                            await viewModel.prepareCleanupData()
+                        }
+                    )
+                } else {
+                    CleanupReviewView(
+                        assets: viewModel.cleanupReviewQueue,
+                        thumbnailStore: viewModel.thumbnailStore,
+                        currentIndex: $reviewIndex,
+                        reviewMode: $viewModel.cleanupReviewMode,
+                        isRefreshing: viewModel.isSyncingCleanupData,
+                        pendingDeletionCount: viewModel.pendingDeletionCount,
+                        pendingDeletionLimit: viewModel.pendingDeletionLimit,
+                        pendingDeletionPreviewAsset: viewModel.lastPendingDeletionAsset,
+                        isCommittingDeletion: viewModel.isRunningCleanup,
+                        onOpenDetail: { asset in
+                            selectedAsset = asset
+                        },
+                        onPreview: { asset in
+                            previewAsset = asset
+                        },
+                        onKeep: { asset in
+                            await viewModel.protectFromCleanup(asset)
+                            clampReviewIndex()
+                        },
+                        onDelete: { asset in
+                            let staged = viewModel.stageAssetForDeletion(asset)
+                            if staged {
+                                clampReviewIndex()
+                            }
+                            return staged
+                        }
+                    ) {
+                        viewModel.undoLastStagedDeletion()
+                        clampReviewIndex()
+                    } onCommitDelete: {
+                        _ = await viewModel.commitPendingDeletions()
+                        clampReviewIndex()
+                    }
+                    .padding()
+                    .id(languageRefreshKey)
+                }
+            }
+            .navigationTitle(L10n.text("tab.cleanup", fallback: "Cleanup"))
+            .navigationBarTitleDisplayMode(.inline)
+            .task {
+                if viewModel.cleanupReviewMode != AppContainer.live.settingsStore.preferredCleanupReviewMode {
+                    viewModel.cleanupReviewMode = AppContainer.live.settingsStore.preferredCleanupReviewMode
+                }
+                if viewModel.authorizationStatus == .notDetermined {
+                    await viewModel.requestPhotoLibraryAccessForBrowsing()
+                    await viewModel.prepareCleanupData()
+                } else {
+                    await viewModel.prepareCleanupData()
+                }
+            }
+            .alert(
+                L10n.text("cleanup.action_title", fallback: "Cleanup Action"),
+                isPresented: Binding(
+                    get: { viewModel.cleanupReviewMessage != nil },
+                    set: { newValue in
+                        if !newValue {
+                            viewModel.dismissCleanupReviewMessage()
+                        }
+                    }
+                )
+            ) {
+                Button(L10n.text("common.ok", fallback: "OK")) {
+                    viewModel.dismissCleanupReviewMessage()
+                }
+            } message: {
+                Text(viewModel.cleanupReviewMessage ?? "")
+            }
+            .sheet(item: $selectedAsset) { asset in
+                AssetEditorSheet(
+                    asset: asset,
+                    tagLibrary: viewModel.tagLibrary,
+                    tagSuggestions: { await viewModel.autoTagSuggestions(for: asset) },
+                    onRefresh: {
+                        await viewModel.load()
+                        selectedAsset = refreshedAsset(from: asset, in: viewModel.assets)
+                    },
+                    onToggleProtection: { await viewModel.toggleProtection(for: asset) },
+                    onToggleScreenshotLike: { await viewModel.toggleImportedScreenshotLike(for: asset) },
+                    onApplyRetentionRule: { rule in
+                        await viewModel.applyRetentionRule(rule, to: asset)
+                    },
+                    onAddTag: { name, colorHex in
+                        await viewModel.addTag(name: name, colorHex: colorHex, to: asset)
+                    },
+                    onAddTags: { entries in
+                        await viewModel.addTags(entries, to: asset)
+                    },
+                    onRemoveTag: { tag in
+                        await viewModel.removeTag(tag, from: asset)
+                    }
+                )
+                .presentationDetents([.large])
+            }
+            .fullScreenCover(item: $previewAsset) { asset in
+                PhotoPreviewSheet(asset: asset, thumbnailStore: viewModel.thumbnailStore)
+            }
+        }
+    }
+
+    /// Re-resolves a selected asset after a reload so sheets continue showing the current model.
+    private func refreshedAsset(from asset: MediaAsset, in assets: [MediaAsset]) -> MediaAsset? {
+        guard let libraryIdentifier = asset.libraryIdentifier else {
+            return assets.first(where: { $0.id == asset.id })
+        }
+
+        return assets.first(where: { $0.libraryIdentifier == libraryIdentifier })
+    }
+
+    /// Clamps the current cleanup review index after assets leave the queue.
     private func clampReviewIndex() {
         let count = viewModel.cleanupReviewQueue.count
         if count == 0 {
@@ -351,10 +483,12 @@ struct CleanupHomeView: View {
     }
 }
 
+/// Tag management tab that exposes the library's folder-like tag catalog.
 struct TagHomeView: View {
     @Environment(AppSettingsStore.self) private var settings
     @State private var viewModel: LibraryHomeViewModel
 
+    /// Stores the shared view model inside local SwiftUI state for the tags tab.
     init(viewModel: LibraryHomeViewModel) {
         _viewModel = State(initialValue: viewModel)
     }
@@ -414,6 +548,7 @@ struct TagHomeView: View {
     }
 }
 
+/// Detail page for one tag, including rename, merge, delete, and asset browsing actions.
 private struct TagDetailView: View {
     @State private var viewModel: LibraryHomeViewModel
     let tagEntry: TagLibraryEntry
@@ -430,6 +565,7 @@ private struct TagDetailView: View {
         GridItem(.flexible(), spacing: 3)
     ]
 
+    /// Stores the shared view model inside local SwiftUI state for the selected tag.
     init(viewModel: LibraryHomeViewModel, tagEntry: TagLibraryEntry) {
         _viewModel = State(initialValue: viewModel)
         self.tagEntry = tagEntry
@@ -567,6 +703,7 @@ private struct TagDetailView: View {
         viewModel.tagLibrary.filter { $0.id != tagEntry.id }
     }
 
+    /// Re-resolves a selected asset after edits so the detail sheet stays in sync.
     private func refreshedAsset(from asset: MediaAsset, in assets: [MediaAsset]) -> MediaAsset? {
         guard let libraryIdentifier = asset.libraryIdentifier else {
             return assets.first(where: { $0.id == asset.id })
@@ -577,6 +714,7 @@ private struct TagDetailView: View {
 
 }
 
+/// Permission gate shown when Photos access is missing or restricted.
 private struct LibraryAuthorizationView: View {
     let message: String
     let authorizationStatus: PhotoLibraryAuthorizationStatus
@@ -602,6 +740,7 @@ private struct LibraryAuthorizationView: View {
     }
 }
 
+/// Compact row used by the Tags tab to preview one tag and its asset count.
 private struct TagFolderRow: View {
     let entry: TagLibraryEntry
     let assets: [MediaAsset]
@@ -626,6 +765,7 @@ private struct TagFolderRow: View {
     }
 }
 
+/// Small cover collage used in tag rows to preview recent assets for a tag.
 private struct TagCoverPreview: View {
     let entry: TagLibraryEntry
     let assets: [MediaAsset]
@@ -658,6 +798,7 @@ private struct TagCoverPreview: View {
     }
 }
 
+/// Intro card at the top of the browse tab that summarizes what the Library tab can do.
 private struct LibraryHeader: View {
     let viewModel: LibraryHomeViewModel
 
@@ -677,6 +818,7 @@ private struct LibraryHeader: View {
     }
 }
 
+/// Search, collection, and tag filter controls for the Library grid.
 private struct LibraryFilterStrip: View {
     @Bindable var viewModel: LibraryHomeViewModel
 
@@ -719,6 +861,7 @@ private struct LibraryFilterStrip: View {
     }
 }
 
+/// Wrapper around the asset grid that also handles loading and empty states.
 private struct LibraryGrid: View {
     let assets: [MediaAsset]
     let thumbnailStore: PhotoLibraryThumbnailStore
@@ -768,6 +911,7 @@ private struct LibraryGrid: View {
         }
     }
 
+    /// Builds the progress label shown while the library is scanning or paging more assets.
     private var progressLabel: String {
         if totalAssetCount > 0 {
             if loadedAssetCount >= totalAssetCount {
@@ -788,7 +932,8 @@ private struct LibraryGrid: View {
     }
 }
 
-private struct ScreenshotSlashView: View {
+/// Full-screen cleanup review surface with review-mode switching and batch delete controls.
+private struct CleanupReviewView: View {
     let assets: [MediaAsset]
     let thumbnailStore: PhotoLibraryThumbnailStore
     @Binding var currentIndex: Int
@@ -798,51 +943,26 @@ private struct ScreenshotSlashView: View {
     let pendingDeletionLimit: Int
     let pendingDeletionPreviewAsset: MediaAsset?
     let isCommittingDeletion: Bool
-    let orbitCollections: [OrbitCollection]
-    @Binding var selectedOrbitID: String?
-    let orbitAssetCounts: [String: Int]
-    let orbitAssets: [MediaAsset]
-    let recipeCollections: [OrbitCollection]
-    let activeRecipe: OrbitRecipeKind?
-    let weeklyRecap: OrbitWeeklyRecap
-    let clusterGroups: [OrbitReviewCluster]
-    let smartSuggestionsProvider: (MediaAsset) -> [OrbitSuggestion]
     let onOpenDetail: (MediaAsset) -> Void
     let onPreview: (MediaAsset) -> Void
     let onKeep: (MediaAsset) async -> Void
-    let onOrbit: (MediaAsset) async -> Void
     let onDelete: (MediaAsset) async -> Bool
     let onUndoDelete: () -> Void
     let onCommitDelete: () async -> Void
-    let onCreateOrbit: () -> Void
-    let onSelectRecipe: (OrbitCollection) -> Void
 
     var body: some View {
         VStack(spacing: 24) {
-            cleanupHeader
+            reviewHeader
 
             if let asset = currentAsset {
-                ScreenshotSlashCard(
+                CleanupReviewCard(
                     asset: asset,
                     nextAsset: nextAsset,
                     thumbnailStore: thumbnailStore,
-                    orbitCollections: orbitCollections,
-                    selectedOrbitID: $selectedOrbitID,
-                    orbitAssetCounts: orbitAssetCounts,
-                    orbitAssets: orbitAssets,
-                    smartSuggestions: smartSuggestionsProvider(asset),
-                    recipeCollections: recipeCollections,
-                    activeRecipe: activeRecipe,
-                    weeklyRecap: weeklyRecap,
-                    clusterGroups: clusterGroups,
                     onPreview: { onPreview(asset) },
                     onOpenDetail: { onOpenDetail(asset) },
                     onKeep: {
                         await onKeep(asset)
-                        advanceAfterAction()
-                    },
-                    onOrbit: {
-                        await onOrbit(asset)
                         advanceAfterAction()
                     },
                     onDelete: {
@@ -850,9 +970,7 @@ private struct ScreenshotSlashView: View {
                         if deleted {
                             advanceAfterAction()
                         }
-                    },
-                    onCreateOrbit: onCreateOrbit,
-                    onSelectRecipe: onSelectRecipe
+                    }
                 )
                 .id(asset.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -890,6 +1008,7 @@ private struct ScreenshotSlashView: View {
         }
     }
 
+    /// Returns the asset currently being reviewed.
     private var currentAsset: MediaAsset? {
         guard assets.indices.contains(currentIndex) else {
             return assets.first
@@ -898,6 +1017,7 @@ private struct ScreenshotSlashView: View {
         return assets[currentIndex]
     }
 
+    /// Returns the asset previewed underneath the current review card.
     private var nextAsset: MediaAsset? {
         let nextIndex = currentIndex + 1
         guard assets.indices.contains(nextIndex) else {
@@ -907,6 +1027,7 @@ private struct ScreenshotSlashView: View {
         return assets[nextIndex]
     }
 
+    /// Returns the empty-state copy for the current cleanup review mode.
     private var emptyStateMessage: String {
         switch reviewMode {
         case .screenshots:
@@ -916,9 +1037,10 @@ private struct ScreenshotSlashView: View {
         }
     }
 
-    private var cleanupHeader: some View {
+    /// Builds the top-of-screen controls for cleanup review.
+    private var reviewHeader: some View {
         VStack(spacing: 12) {
-            cleanupModePicker
+            ReviewModePicker(reviewMode: $reviewMode)
 
             if isRefreshing {
                 HStack(spacing: 6) {
@@ -932,34 +1054,7 @@ private struct ScreenshotSlashView: View {
         }
     }
 
-    private var cleanupModePicker: some View {
-        HStack(spacing: 8) {
-            ForEach(CleanupReviewMode.allCases) { mode in
-                Button {
-                    reviewMode = mode
-                } label: {
-                    Text(mode.title)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(reviewMode == mode ? Color.white : Color.primary)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(
-                            Group {
-                                if reviewMode == mode {
-                                    Capsule().fill(Color.accentColor)
-                                } else {
-                                    Capsule().fill(Color(.secondarySystemBackground))
-                                }
-                            }
-                        )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(6)
-        .background(Color(.tertiarySystemBackground), in: Capsule())
-    }
-
+    /// Keeps the review cursor inside bounds after an asset leaves the queue.
     private func advanceAfterAction() {
         if assets.isEmpty {
             currentIndex = 0
@@ -969,57 +1064,22 @@ private struct ScreenshotSlashView: View {
     }
 }
 
-private struct ScreenshotSlashCard: View {
-    private enum DragAxisLock {
-        case undecided
-        case horizontal
-        case vertical
-    }
-
+/// Swipe-driven cleanup card that supports keep, inspect, and staged-delete actions.
+private struct CleanupReviewCard: View {
     let asset: MediaAsset
     let nextAsset: MediaAsset?
     let thumbnailStore: PhotoLibraryThumbnailStore
-    let orbitCollections: [OrbitCollection]
-    @Binding var selectedOrbitID: String?
-    let orbitAssetCounts: [String: Int]
-    let orbitAssets: [MediaAsset]
-    let smartSuggestions: [OrbitSuggestion]
-    let recipeCollections: [OrbitCollection]
-    let activeRecipe: OrbitRecipeKind?
-    let weeklyRecap: OrbitWeeklyRecap
-    let clusterGroups: [OrbitReviewCluster]
     let onPreview: () -> Void
     let onOpenDetail: () -> Void
     let onKeep: () async -> Void
-    let onOrbit: () async -> Void
     let onDelete: () async -> Void
-    let onCreateOrbit: () -> Void
-    let onSelectRecipe: (OrbitCollection) -> Void
 
     @State private var dragOffset: CGSize = .zero
     @State private var isActing = false
-    @State private var dragAxisLock: DragAxisLock = .undecided
 
     var body: some View {
         VStack(spacing: 20) {
-            OrbitRecipeStrip(
-                collections: recipeCollections,
-                activeRecipe: activeRecipe,
-                onSelect: onSelectRecipe
-            )
-
-            GeometryReader { geometry in
-                let activeHorizontalOffset = dragAxisLock == .horizontal ? dragOffset.width : 0
-                let activeVerticalOffset = dragAxisLock == .vertical ? max(dragOffset.height, 0) : 0
-                let orbitProgress = min(max((activeVerticalOffset - 24) / 180, 0), 1)
-                let orbitCueProgress = min(max(activeVerticalOffset / 140, 0), 1)
-                let targetSize: CGFloat = 58
-                let baseHeight: CGFloat = 440
-                let baseWidth = max(min(geometry.size.width, 380), targetSize)
-                let cardWidth = baseWidth - ((baseWidth - targetSize) * orbitProgress)
-                let cardHeight = baseHeight - ((baseHeight - targetSize) * orbitProgress)
-                let cardCornerRadius = 28 + ((targetSize / 2 - 28) * orbitProgress)
-
+            GeometryReader { _ in
                 ZStack {
                     if let nextAsset {
                         ReviewCardFace(
@@ -1028,7 +1088,6 @@ private struct ScreenshotSlashCard: View {
                             overlayOpacity: 0.18
                         )
                         .scaleEffect(0.94)
-                        .opacity(dragAxisLock == .vertical ? max(0.18, 1 - orbitCueProgress * 2.6) : 1)
                         .offset(y: 18)
                     }
 
@@ -1037,63 +1096,44 @@ private struct ScreenshotSlashCard: View {
                         thumbnailStore: thumbnailStore,
                         overlayOpacity: 0
                     )
-                    .frame(width: cardWidth, height: cardHeight)
-                    .clipShape(
-                        RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
-                    )
                     .onTapGesture(perform: onPreview)
                     .overlay(alignment: .topLeading) {
-                        if dragAxisLock == .horizontal, activeHorizontalOffset > 24 {
-                            slashIndicator
-                                .padding(.top, 28)
-                                .padding(.leading, 18)
+                        if dragOffset.width > 24 {
+                            swipeCue(
+                                systemImage: "bookmark.fill",
+                                tint: .green,
+                                emphasis: min(abs(dragOffset.width) / 140, 1)
+                            )
+                            .padding(.top, 28)
+                            .padding(.leading, 18)
                         }
                     }
                     .overlay(alignment: .topTrailing) {
-                        if dragAxisLock == .horizontal, activeHorizontalOffset < -24 {
-                            slashIndicator
-                                .padding(.top, 28)
-                                .padding(.trailing, 18)
+                        if dragOffset.width < -24 {
+                            swipeCue(
+                                systemImage: "trash.fill",
+                                tint: .red,
+                                emphasis: min(abs(dragOffset.width) / 140, 1)
+                            )
+                            .padding(.top, 28)
+                            .padding(.trailing, 18)
                         }
                     }
-                    .overlay(alignment: .top) {
-                        if dragAxisLock == .vertical {
-                            orbitCue(emphasis: orbitCueProgress)
-                                .padding(.top, 26)
-                        }
-                    }
-                    .offset(
-                        x: activeHorizontalOffset,
-                        y: dragAxisLock == .vertical ? activeVerticalOffset * 0.5 : 0
-                    )
-                    .rotationEffect(
-                        .degrees(
-                            dragAxisLock == .horizontal
-                                ? Double(activeHorizontalOffset / 18) * (1 - orbitProgress)
-                                : 0
-                        )
-                    )
+                    .offset(x: dragOffset.width)
+                    .rotationEffect(.degrees(Double(dragOffset.width / 18)))
                     .shadow(color: Color.black.opacity(0.14), radius: 30, y: 22)
                     .gesture(
                         DragGesture(minimumDistance: 12)
                             .onChanged { value in
-                                guard !isActing else {
-                                    return
-                                }
-                                updateDragState(with: value.translation)
+                                guard !isActing else { return }
+                                dragOffset = CGSize(width: value.translation.width, height: 0)
                             }
                             .onEnded { value in
-                                guard !isActing else {
-                                    return
-                                }
+                                guard !isActing else { return }
 
-                                let horizontal = dragAxisLock == .horizontal ? value.translation.width : 0
-                                let vertical = dragAxisLock == .vertical ? value.translation.height : 0
-                                if dragAxisLock == .vertical, vertical > 130 {
-                                    Task { await performOrbit() }
-                                } else if dragAxisLock == .horizontal, horizontal > 120 {
+                                if value.translation.width > 120 {
                                     Task { await performKeep() }
-                                } else if dragAxisLock == .horizontal, horizontal < -120 {
+                                } else if value.translation.width < -120 {
                                     Task { await performDelete() }
                                 } else {
                                     resetDragOffset()
@@ -1105,25 +1145,9 @@ private struct ScreenshotSlashCard: View {
             }
             .frame(height: 470)
 
-            OrbitRailView(
-                collections: orbitCollections,
-                selectedOrbitID: $selectedOrbitID,
-                assetCounts: orbitAssetCounts,
-                assets: orbitAssets,
-                thumbnailStore: thumbnailStore,
-                suggestions: smartSuggestions,
-                onCreateOrbit: onCreateOrbit
-            )
-
-            OrbitRecapCard(recap: weeklyRecap)
-
-            if let primaryCluster = clusterGroups.first {
-                OrbitClusterCard(cluster: primaryCluster)
-            }
-
             HStack(spacing: 16) {
                 ActionOrbButton(
-                    title: L10n.text("cleanup.queue", fallback: "Queue"),
+                    title: L10n.text("cleanup.delete", fallback: "Delete"),
                     systemImage: "trash.fill",
                     tint: .red,
                     isEnabled: !isActing
@@ -1159,32 +1183,301 @@ private struct ScreenshotSlashCard: View {
         }
     }
 
-    @ViewBuilder
-    private var slashIndicator: some View {
-        if dragOffset.width > 24 {
-            swipeCue(
-                systemImage: "bookmark.fill",
-                tint: .green,
-                emphasis: min(abs(dragOffset.width) / 140, 1)
-            )
-        } else if dragOffset.width < -24 {
-            swipeCue(
-                systemImage: "trash.fill",
-                tint: .red,
-                emphasis: min(abs(dragOffset.width) / 140, 1)
-            )
+    /// Performs the keep action once and then resets the local drag state.
+    private func performKeep() async {
+        guard !isActing else { return }
+        isActing = true
+        await onKeep()
+        resetDragOffset(animated: false)
+        isActing = false
+    }
+
+    /// Performs the staged-delete action once and then resets the local drag state.
+    private func performDelete() async {
+        guard !isActing else { return }
+        isActing = true
+        await onDelete()
+        resetDragOffset(animated: false)
+        isActing = false
+    }
+
+    /// Resets the swipe offset, optionally with a spring animation.
+    private func resetDragOffset(animated: Bool = true) {
+        let action = { dragOffset = .zero }
+        if animated {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82), action)
+        } else {
+            action()
+        }
+    }
+}
+
+/// Orbit review surface that combines recipe shortcuts, the active review card, and the Orbit rail.
+private struct OrbitReviewView: View {
+    let assets: [MediaAsset]
+    let thumbnailStore: PhotoLibraryThumbnailStore
+    @Binding var currentIndex: Int
+    let isRefreshing: Bool
+    let orbitCollections: [OrbitCollection]
+    @Binding var selectedOrbitID: String?
+    let orbitAssetCounts: [String: Int]
+    let orbitAssets: [MediaAsset]
+    let recipeCollections: [OrbitCollection]
+    let activeRecipe: OrbitRecipeKind?
+    let smartSuggestionsProvider: (MediaAsset) -> [OrbitSuggestion]
+    let onPreview: (MediaAsset) -> Void
+    let onOrbit: (MediaAsset) async -> Void
+    let onCreateOrbit: () -> Void
+    let onSelectRecipe: (OrbitCollection) -> Void
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 20) {
+                if isRefreshing {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(L10n.text("orbit.refreshing", fallback: "Refreshing Orbit inbox"))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                OrbitRecipeStrip(
+                    collections: recipeCollections,
+                    activeRecipe: activeRecipe,
+                    onSelect: onSelectRecipe
+                )
+
+                if let asset = currentAsset {
+                    OrbitReviewCard(
+                        asset: asset,
+                        nextAsset: nextAsset,
+                        thumbnailStore: thumbnailStore,
+                        onPreview: { onPreview(asset) },
+                        onOrbit: {
+                            await onOrbit(asset)
+                            advanceAfterAction()
+                        }
+                    )
+                    .id(asset.id)
+                    .frame(maxWidth: .infinity)
+                } else {
+                    SnapuaryCard(title: L10n.text("orbit.empty_title", fallback: "Orbit Inbox Clear")) {
+                        Text(L10n.text("orbit.empty_body", fallback: "No more photos are waiting to be sorted into an Orbit right now."))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                OrbitRailView(
+                    collections: orbitCollections,
+                    selectedOrbitID: $selectedOrbitID,
+                    assetCounts: orbitAssetCounts,
+                    assets: orbitAssets,
+                    thumbnailStore: thumbnailStore,
+                    suggestions: currentAsset.map(smartSuggestionsProvider) ?? [],
+                    onCreateOrbit: onCreateOrbit
+                )
+
+                if let title = currentAsset?.title, !title.isEmpty {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.bottom, 20)
+        }
+        .onChange(of: assets.count) { _, newCount in
+            if newCount == 0 {
+                currentIndex = 0
+            } else {
+                currentIndex = min(currentIndex, newCount - 1)
+            }
         }
     }
 
-    private func swipeCue(
-        systemImage: String,
-        tint: Color,
-        emphasis: Double
-    ) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(tint.opacity(0.95))
-            .frame(width: 34, height: 34)
+    /// Returns the asset currently at the top of the Orbit inbox.
+    private var currentAsset: MediaAsset? {
+        guard assets.indices.contains(currentIndex) else {
+            return assets.first
+        }
+
+        return assets[currentIndex]
+    }
+
+    /// Returns the asset previewed behind the current Orbit card.
+    private var nextAsset: MediaAsset? {
+        let nextIndex = currentIndex + 1
+        guard assets.indices.contains(nextIndex) else {
+            return nil
+        }
+
+        return assets[nextIndex]
+    }
+
+    /// Keeps the Orbit review cursor inside bounds after one asset gets assigned.
+    private func advanceAfterAction() {
+        if assets.isEmpty {
+            currentIndex = 0
+        } else {
+            currentIndex = min(currentIndex, max(assets.count - 1, 0))
+        }
+    }
+}
+
+/// Downward-drag Orbit card that turns a photo into a targeted Orbit assignment gesture.
+private struct OrbitReviewCard: View {
+    let asset: MediaAsset
+    let nextAsset: MediaAsset?
+    let thumbnailStore: PhotoLibraryThumbnailStore
+    let onPreview: () -> Void
+    let onOrbit: () async -> Void
+
+    @State private var dragOffset: CGSize = .zero
+    @State private var isActing = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            GeometryReader { geometry in
+                let activeVerticalOffset = max(dragOffset.height, 0)
+                let orbitProgress = min(max((activeVerticalOffset - 12) / 210, 0), 1)
+                let orbitCueProgress = min(max(activeVerticalOffset / 150, 0), 1)
+                let targetSize: CGFloat = 68
+                let baseHeight: CGFloat = 440
+                let baseWidth = max(min(geometry.size.width, 380), targetSize)
+                let cardWidth = baseWidth - ((baseWidth - targetSize) * orbitProgress)
+                let cardHeight = baseHeight - ((baseHeight - targetSize) * orbitProgress)
+                let cardCornerRadius = 28 + ((targetSize / 2 - 28) * orbitProgress)
+
+                ZStack {
+                    if let nextAsset {
+                        ReviewCardFace(
+                            asset: nextAsset,
+                            thumbnailStore: thumbnailStore,
+                            overlayOpacity: 0.18
+                        )
+                        .scaleEffect(0.94)
+                        .offset(y: 18)
+                    }
+
+                    ReviewCardFace(
+                        asset: asset,
+                        thumbnailStore: thumbnailStore,
+                        overlayOpacity: 0
+                    )
+                    .frame(width: cardWidth, height: cardHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous))
+                    .onTapGesture(perform: onPreview)
+                    .overlay(alignment: .bottom) {
+                        orbitDropTarget(emphasis: orbitCueProgress)
+                            .padding(.bottom, 18)
+                    }
+                    .offset(y: activeVerticalOffset * 0.82)
+                    .shadow(color: Color.black.opacity(0.14), radius: 30, y: 22)
+                    .gesture(
+                        DragGesture(minimumDistance: 12)
+                            .onChanged { value in
+                                guard !isActing else { return }
+                                dragOffset = CGSize(width: 0, height: max(value.translation.height, 0))
+                            }
+                            .onEnded { value in
+                                guard !isActing else { return }
+
+                                if value.translation.height > 130 {
+                                    Task { await performOrbit() }
+                                } else {
+                                    resetDragOffset()
+                                }
+                            }
+                    )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .frame(height: 470)
+        }
+    }
+
+    /// Builds the floating Orbit target that appears as the card shrinks into a ball.
+    private func orbitDropTarget(emphasis: Double) -> some View {
+        let strokeColor = Color.accentColor.opacity(0.18 + (0.26 * emphasis))
+        let shadowColor = Color.accentColor.opacity(0.08 + (0.1 * emphasis))
+
+        return Image(systemName: "circle.hexagongrid.fill")
+            .font(.system(size: 18, weight: .semibold))
+            .foregroundStyle(Color.accentColor.opacity(0.92))
+            .frame(width: 52, height: 52)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().stroke(strokeColor, lineWidth: 1.2))
+            .shadow(color: shadowColor, radius: 14, y: 6)
+            .opacity(0.2 + (0.6 * emphasis))
+            .scaleEffect(0.86 + (0.14 * emphasis))
+    }
+
+    /// Performs the Orbit assignment once and then resets the drag state.
+    private func performOrbit() async {
+        guard !isActing else { return }
+        isActing = true
+        await onOrbit()
+        resetDragOffset(animated: false)
+        isActing = false
+    }
+
+    /// Resets the downward drag offset, optionally with animation.
+    private func resetDragOffset(animated: Bool = true) {
+        let action = { dragOffset = .zero }
+        if animated {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.82), action)
+        } else {
+            action()
+        }
+    }
+}
+
+/// Segmented pill control for toggling cleanup review modes.
+private struct ReviewModePicker: View {
+    @Binding var reviewMode: CleanupReviewMode
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(CleanupReviewMode.allCases) { mode in
+                Button {
+                    reviewMode = mode
+                } label: {
+                    Text(mode.title)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(reviewMode == mode ? Color.white : Color.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(
+                            Group {
+                                if reviewMode == mode {
+                                    Capsule().fill(Color.accentColor)
+                                } else {
+                                    Capsule().fill(Color(.secondarySystemBackground))
+                                }
+                            }
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .background(Color(.tertiarySystemBackground), in: Capsule())
+    }
+}
+
+/// Floating swipe cue used by cleanup review to hint at keep or delete outcomes.
+private func swipeCue(
+    systemImage: String,
+    tint: Color,
+    emphasis: Double
+) -> some View {
+    Image(systemName: systemImage)
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(tint.opacity(0.95))
+        .frame(width: 34, height: 34)
         .background(
             Circle()
                 .fill(.ultraThinMaterial)
@@ -1196,101 +1489,9 @@ private struct ScreenshotSlashCard: View {
         .shadow(color: Color.black.opacity(0.05), radius: 8, y: 4)
         .opacity(0.58 + (0.2 * emphasis))
         .scaleEffect(0.94 + (0.05 * emphasis))
-        .offset(x: dragOffset.width > 0 ? max(-6 * emphasis, -6) : min(6 * emphasis, 6))
-    }
-
-    private func orbitCue(emphasis: Double) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "circle.hexagongrid.fill")
-                .font(.system(size: 13, weight: .semibold))
-            Text(L10n.text("orbit.drop_target", fallback: "Orbit"))
-                .font(.footnote.weight(.semibold))
-        }
-        .foregroundStyle(Color.accentColor.opacity(0.92))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.white.opacity(0.34), lineWidth: 0.8)
-        }
-        .shadow(color: Color.black.opacity(0.05), radius: 10, y: 5)
-        .opacity(0.32 + (0.42 * emphasis))
-        .scaleEffect(0.94 + (0.05 * emphasis))
-    }
-
-    private func performKeep() async {
-        guard !isActing else {
-            return
-        }
-
-        isActing = true
-        await onKeep()
-        resetDragOffset(animated: false)
-        isActing = false
-    }
-
-    private func performDelete() async {
-        guard !isActing else {
-            return
-        }
-
-        isActing = true
-        await onDelete()
-        resetDragOffset(animated: false)
-        isActing = false
-    }
-
-    private func performOrbit() async {
-        guard !isActing else {
-            return
-        }
-
-        isActing = true
-        await onOrbit()
-        resetDragOffset(animated: false)
-        isActing = false
-    }
-
-    private func updateDragState(with translation: CGSize) {
-        if dragAxisLock == .undecided {
-            let horizontal = abs(translation.width)
-            let vertical = max(translation.height, 0)
-            let lockThreshold: CGFloat = 20
-
-            if horizontal > lockThreshold || vertical > lockThreshold {
-                if vertical > horizontal * 1.15 {
-                    dragAxisLock = .vertical
-                } else if horizontal > vertical * 1.15 {
-                    dragAxisLock = .horizontal
-                }
-            }
-        }
-
-        switch dragAxisLock {
-        case .undecided:
-            dragOffset = .zero
-        case .horizontal:
-            dragOffset = CGSize(width: translation.width, height: 0)
-        case .vertical:
-            dragOffset = CGSize(width: 0, height: max(translation.height, 0))
-        }
-    }
-
-    private func resetDragOffset(animated: Bool = true) {
-        let action = {
-            dragOffset = .zero
-            dragAxisLock = .undecided
-        }
-
-        if animated {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.82), action)
-        } else {
-            action()
-        }
-    }
 }
 
+/// Horizontal rail that shows Orbit collections and the assets already placed into the active Orbit.
 private struct OrbitRailView: View {
     let collections: [OrbitCollection]
     @Binding var selectedOrbitID: String?
@@ -1367,18 +1568,6 @@ private struct OrbitRailView: View {
                 .padding(.horizontal, 2)
             }
             .frame(height: 38)
-            .overlay(alignment: .leading) {
-                if assets.isEmpty {
-                    HStack(spacing: 8) {
-                        Image(systemName: "circle.grid.2x2.fill")
-                            .font(.caption)
-                        Text(L10n.text("orbit.hint", fallback: "Drag down to place photos into Orbit"))
-                            .font(.footnote)
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                }
-            }
         }
         .padding(12)
         .background(
@@ -1388,6 +1577,7 @@ private struct OrbitRailView: View {
     }
 }
 
+/// Capsule-style Orbit selector shown inside the Orbit rail.
 private struct OrbitTagCapsule: View {
     let title: String
     let colorHex: String
@@ -1425,6 +1615,7 @@ private struct OrbitTagCapsule: View {
     }
 }
 
+/// Horizontal recipe strip for task-style Orbit review sessions.
 private struct OrbitRecipeStrip: View {
     let collections: [OrbitCollection]
     let activeRecipe: OrbitRecipeKind?
@@ -1468,6 +1659,7 @@ private struct OrbitRecipeStrip: View {
     }
 }
 
+/// Weekly recap card surfaced on the Library tab.
 private struct OrbitRecapCard: View {
     let recap: OrbitWeeklyRecap
 
@@ -1496,6 +1688,7 @@ private struct OrbitRecapCard: View {
         )
     }
 
+    /// Builds one metric column inside the weekly recap card.
     private func recapMetric(title: String, value: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("\(value)")
@@ -1508,6 +1701,7 @@ private struct OrbitRecapCard: View {
     }
 }
 
+/// Placeholder cluster card used for grouped review concepts.
 private struct OrbitClusterCard: View {
     let cluster: OrbitReviewCluster
 
@@ -1533,6 +1727,7 @@ private struct OrbitClusterCard: View {
     }
 }
 
+/// Shared visual face used by both cleanup and Orbit review cards.
 private struct ReviewCardFace: View {
     let asset: MediaAsset
     let thumbnailStore: PhotoLibraryThumbnailStore
@@ -1569,6 +1764,7 @@ private struct ReviewCardFace: View {
             }
     }
 
+    /// Builds the small metadata chips layered above the review card image.
     private func metadataChip(title: String, systemImage: String) -> some View {
         Label(title, systemImage: systemImage)
             .font(.caption.weight(.semibold))
@@ -1579,6 +1775,7 @@ private struct ReviewCardFace: View {
     }
 }
 
+/// Bottom bar that manages the staged deletion queue and commit action.
 private struct PendingDeletionBar: View {
     let pendingCount: Int
     let pendingLimit: Int
@@ -1620,6 +1817,7 @@ private struct PendingDeletionBar: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
+    /// Returns the secondary status line shown under the queue count.
     private var statusLine: String {
         if pendingCount >= pendingLimit {
             return L10n.text("cleanup.queue_full", fallback: "Queue is full. Delete or undo before adding more screenshots.")
@@ -1632,6 +1830,7 @@ private struct PendingDeletionBar: View {
         return L10n.text("cleanup.review_or_delete_batch", fallback: "Review more screenshots or delete this batch now.")
     }
 
+    /// Returns the localized queue-count label for the staged deletion batch.
     private var queueCountLabel: String {
         if pendingCount == 1 {
             return L10n.text("cleanup.queue_count_singular", fallback: "1 %@ queued", itemLabel)
@@ -1640,6 +1839,7 @@ private struct PendingDeletionBar: View {
         return L10n.text("cleanup.queue_count_plural", fallback: "%lld %@s queued", pendingCount, itemLabel)
     }
 
+    /// Submits the staged deletion batch while preventing duplicate taps.
     private func submitDeletion() async {
         guard !isSubmitting else {
             return
@@ -1652,6 +1852,7 @@ private struct PendingDeletionBar: View {
 }
 
 private extension ReviewCardFace {
+    /// Formats the tag area of the review card when one or more tags are attached.
     var tagLabel: String {
         if asset.tags.count == 1 {
             return L10n.text("tags.count.singular", fallback: "1 tag")
@@ -1988,6 +2189,7 @@ private struct PhotoThumbnailView: View {
     @State private var image: UIImage?
     @State private var requestID: PHImageRequestID?
 
+    /// Initializes a thumbnail view for one asset and its desired display style.
     init(
         asset: MediaAsset,
         thumbnailStore: PhotoLibraryThumbnailStore = .empty,
@@ -2024,6 +2226,7 @@ private struct PhotoThumbnailView: View {
         }
     }
 
+    /// Starts a thumbnail request the first time the view appears for a specific asset.
     @MainActor
     private func loadThumbnailIfNeeded() async {
         guard image == nil,
@@ -2042,6 +2245,7 @@ private struct PhotoThumbnailView: View {
     }
 }
 
+/// Full-screen preview sheet with zoom support for inspecting one photo at larger size.
 private struct PhotoPreviewSheet: View {
     let asset: MediaAsset
     let thumbnailStore: PhotoLibraryThumbnailStore
@@ -2097,6 +2301,7 @@ private struct PhotoPreviewSheet: View {
         }
     }
 
+    /// Starts a larger preview-image request once the sheet appears.
     @MainActor
     private func loadPreviewIfNeeded() async {
         guard image == nil,
@@ -2113,9 +2318,11 @@ private struct PhotoPreviewSheet: View {
     }
 }
 
+/// UIKit scroll view wrapper that provides pinch-to-zoom for preview images.
 private struct ZoomableImageScrollView: UIViewRepresentable {
     let image: UIImage
 
+    /// Builds the scroll view and embedded image view used for zooming.
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
         scrollView.delegate = context.coordinator
@@ -2136,24 +2343,29 @@ private struct ZoomableImageScrollView: UIViewRepresentable {
         return scrollView
     }
 
+    /// Pushes updated image content into the existing zoomable scroll view.
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
         context.coordinator.imageView?.image = image
         context.coordinator.imageView?.frame = scrollView.bounds
     }
 
+    /// Creates the UIKit coordinator used for zoom delegation.
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
 
+    /// Delegates zoom behavior back to the embedded image view.
     final class Coordinator: NSObject, UIScrollViewDelegate {
         weak var imageView: UIImageView?
 
+        /// Returns the view that should scale while pinch-zooming.
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
             imageView
         }
     }
 }
 
+/// Main editor sheet for one asset, combining overview, actions, rule editing, and tag editing.
 private struct AssetEditorSheet: View {
     let asset: MediaAsset
     let tagLibrary: [TagLibraryEntry]
@@ -2288,6 +2500,7 @@ private struct AssetEditorSheet: View {
     }
 }
 
+/// Dedicated editor for screenshot retention rules.
 private struct AssetRuleEditorView: View {
     let asset: MediaAsset
     let onRefresh: () async -> Void
@@ -2367,6 +2580,7 @@ private struct AssetRuleEditorView: View {
     }
 }
 
+/// Full tag-management screen for one asset, including batch application from the global tag library.
 private struct AssetTagManagerView: View {
     let asset: MediaAsset
     let tagLibrary: [TagLibraryEntry]
@@ -2474,11 +2688,13 @@ private struct AssetTagManagerView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    /// Filters out tags the asset already has so the suggestion list only shows addable entries.
     private var suggestionEntries: [TagLibraryEntry] {
         let currentNames = Set(asset.tags.map(\.normalizedName))
         return tagLibrary.filter { !currentNames.contains($0.normalizedName) }
     }
 
+    /// Toggles whether a saved tag is included in the current batch-apply selection.
     private func toggleBatchSelection(_ entry: TagLibraryEntry) {
         if selectedBatchTagIDs.contains(entry.id) {
             selectedBatchTagIDs.remove(entry.id)
@@ -2488,6 +2704,7 @@ private struct AssetTagManagerView: View {
     }
 }
 
+/// Inline tag editor section used by the main asset editor sheet.
 private struct QuickTagEditorSection: View {
     let asset: MediaAsset
     let availableEntries: [TagLibraryEntry]
@@ -2613,12 +2830,14 @@ private struct QuickTagEditorSection: View {
         .padding(.vertical, 4)
     }
 
+    /// Filters the global tag entries down to tags the asset does not already use.
     private var suggestedEntries: [TagLibraryEntry] {
         let currentNames = Set(asset.tags.map(\.normalizedName))
         return availableEntries.filter { !currentNames.contains($0.normalizedName) }
     }
 }
 
+/// Formats a localized singular or plural photo-count label.
 private func photoCountLabel(for count: Int) -> String {
     if count == 1 {
         return L10n.text("photos.count.singular", fallback: "1 photo")

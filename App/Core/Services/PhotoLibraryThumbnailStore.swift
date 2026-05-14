@@ -2,6 +2,7 @@ import Foundation
 import Photos
 import UIKit
 
+/// Shared thumbnail and preview image cache backed by `PHCachingImageManager`.
 final class PhotoLibraryThumbnailStore {
     static let empty = PhotoLibraryThumbnailStore()
 
@@ -10,18 +11,21 @@ final class PhotoLibraryThumbnailStore {
     private let assetLock = NSLock()
     private var assetsByIdentifier: [String: PHAsset] = [:]
 
+    /// Registers one `PHAsset` so future image requests can avoid another PhotoKit fetch.
     func register(asset: PHAsset) {
         assetLock.lock()
         assetsByIdentifier[asset.localIdentifier] = asset
         assetLock.unlock()
     }
 
+    /// Registers a batch of `PHAsset` values, typically after paging from PhotoKit.
     func register(assets: [PHAsset]) {
         for asset in assets {
             register(asset: asset)
         }
     }
 
+    /// Returns a cached or asynchronously requested thumbnail for a library asset.
     @discardableResult
     func requestThumbnail(
         for localIdentifier: String,
@@ -58,6 +62,7 @@ final class PhotoLibraryThumbnailStore {
         }
     }
 
+    /// Requests a larger preview image suitable for full-screen inspection.
     @discardableResult
     func requestPreviewImage(
         for localIdentifier: String,
@@ -84,6 +89,7 @@ final class PhotoLibraryThumbnailStore {
         }
     }
 
+    /// Cancels an in-flight PhotoKit image request.
     func cancelRequest(_ requestID: PHImageRequestID?) {
         guard let requestID else {
             return
@@ -92,6 +98,7 @@ final class PhotoLibraryThumbnailStore {
         imageManager.cancelImageRequest(requestID)
     }
 
+    /// Starts preheating thumbnails for assets that are about to scroll onscreen.
     func startCaching(
         localIdentifiers: [String],
         targetSize: CGSize,
@@ -110,6 +117,7 @@ final class PhotoLibraryThumbnailStore {
         )
     }
 
+    /// Stops preheating thumbnails for assets that moved away from the scroll window.
     func stopCaching(
         localIdentifiers: [String],
         targetSize: CGSize,
@@ -128,6 +136,7 @@ final class PhotoLibraryThumbnailStore {
         )
     }
 
+    /// Returns a cached `PHAsset` or lazily fetches it from PhotoKit by identifier.
     private func asset(for localIdentifier: String) -> PHAsset? {
         assetLock.lock()
         if let asset = assetsByIdentifier[localIdentifier] {
@@ -147,6 +156,7 @@ final class PhotoLibraryThumbnailStore {
         return asset
     }
 
+    /// Builds a stable cache key that separates identifiers by target size and content mode.
     private func thumbnailCacheKey(
         for localIdentifier: String,
         targetSize: CGSize,
